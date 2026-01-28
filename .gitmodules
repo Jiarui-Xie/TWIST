@@ -1,0 +1,7 @@
+[submodule "AMASS_Retargeted_for_G1"]
+    path = AMASS_Retargeted_for_G1
+    url = https://huggingface.co/datasets/ember-lab-berkeley/AMASS_Retargeted_for_G1
+
+[submodule "cmg_workspace"]
+    path = cmg_workspace
+    url = https://github.com/PMY9527/cmg_workspace.git
