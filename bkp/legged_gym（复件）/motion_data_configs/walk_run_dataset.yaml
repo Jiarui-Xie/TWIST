@@ -1,0 +1,144 @@
+root_path: /home/jaxon/TWIST-master/twist_motion_dataset/home/yanjieze/projects/g1_wbc/humanoid-motion-imitation/track_dataset/twist_motion_dataset
+motions:
+# 专门的行走数据
+- file: mocap/walk.pkl
+  weight: 100.0
+  description: walking motion
+
+# 行走相关的转换动作 (walk transitions)
+- file: accad/B1___stand_to_walk.pkl
+  weight: 50.0
+  description: stand to walk transition
+
+- file: accad/B2___walk_to_stand.pkl
+  weight: 50.0
+  description: walk to stand transition
+
+- file: accad/B3___walk.pkl
+  weight: 100.0
+  description: walking
+
+- file: accad/B4___stand_to_walk_backwards.pkl
+  weight: 50.0
+  description: stand to walk backwards transition
+
+- file: accad/B5___walk_backwards.pkl
+  weight: 100.0
+  description: walk backwards
+
+- file: accad/B6___walk_backwards_to_stand.pkl
+  weight: 50.0
+  description: walk backwards to stand transition
+
+- file: accad/B9___walk_turn_left__90_.pkl
+  weight: 75.0
+  description: walk turn left 90 degrees
+
+- file: accad/B10___walk_turn_left__45_.pkl
+  weight: 75.0
+  description: walk turn left 45 degrees
+
+- file: accad/B14____Walk_turn_right_45.pkl
+  weight: 75.0
+  description: walk turn right 45 degrees
+
+- file: accad/B15___walk_turn_around__same_direction_.pkl
+  weight: 75.0
+  description: walk turn around
+
+# 跑步相关的转换动作 (running transitions)
+- file: accad/C1___stand_to_run.pkl
+  weight: 50.0
+  description: stand to run transition
+
+- file: accad/C3___run.pkl
+  weight: 100.0
+  description: running
+
+- file: accad/C2___Run_to_stand.pkl
+  weight: 50.0
+  description: run to stand transition
+
+- file: accad/C4___Run_to_walk.pkl
+  weight: 50.0
+  description: run to walk transition
+
+- file: accad/C5___walk_to_run.pkl
+  weight: 50.0
+  description: walk to run transition
+
+- file: accad/C7___run_backwards_t2.pkl
+  weight: 75.0
+  description: run backwards
+
+- file: accad/C8___run_backwards_to_stand.pkl
+  weight: 50.0
+  description: run backwards to stand transition
+
+- file: accad/C11___run_turn_left_90.pkl
+  weight: 75.0
+  description: run turn left 90 degrees
+
+- file: accad/C14____run_turn_right___90_.pkl
+  weight: 75.0
+  description: run turn right 90 degrees
+
+# 速度变化 (speed variations)
+- file: accad/Walk_B4___Stand_to_Walk_Back.pkl
+  weight: 50.0
+  description: vary walk speed
+
+- file: accad/Sprint1.pkl
+  weight: 100.0
+  description: sprint running
+
+# 部分mocap数据 - 通常包含走路和跑步
+- file: mocap/0.pkl
+  weight: 50.0
+  description: general movement (mostly walking)
+
+- file: mocap/1.pkl
+  weight: 50.0
+  description: general movement (mostly walking)
+
+- file: mocap/2.pkl
+  weight: 50.0
+  description: general movement (mostly walking)
+
+- file: mocap/3.pkl
+  weight: 50.0
+  description: general movement (mostly walking)
+
+# 眼睛日本数据集中的行走
+- file: eyes_japan/walk_01_normal_kanno.pkl
+  weight: 50.0
+  description: normal walk
+
+- file: eyes_japan/walk_04_fast_aita.pkl
+  weight: 50.0
+  description: fast walk
+
+- file: eyes_japan/walk_05_backward_kanno.pkl
+  weight: 50.0
+  description: walk backwards
+
+- file: eyes_japan/walk_03_sneak_shiono.pkl
+  weight: 50.0
+  description: sneak walking
+
+- file: eyes_japan/walk_07_moonwalk_hamada.pkl
+  weight: 25.0
+  description: moonwalk style
+
+# 过渡动作 - 跑步和行走的组合
+- file: transitions/run_walk.pkl
+  weight: 50.0
+  description: run to walk transition
+
+- file: transitions/jumpinplace_walkbackwards.pkl
+  weight: 25.0
+  description: jump to walk backwards
+
+- file: transitions/walksideways_walk.pkl
+  weight: 50.0
+  description: walk sideways to walk
