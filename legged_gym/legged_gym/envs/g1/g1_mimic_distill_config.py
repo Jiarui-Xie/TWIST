@@ -515,6 +515,10 @@ class G1MimicStuRLCfgDAgger(G1MimicStuRLCfg):
 class G1MimicCMGBaseCfg(G1MimicPrivCfg):
     """Base configuration for CMG-based motion generation."""
 
+    class terrain(G1MimicPrivCfg.terrain):
+        # Use simple plane terrain to reduce GPU memory usage
+        mesh_type = 'plane'
+
     class motion(G1MimicPrivCfg.motion):
         # Enable CMG motion generation
         use_cmg = True

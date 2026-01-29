@@ -94,9 +94,8 @@ class CMGMotionLib:
         # Initialize forward kinematics for key body position computation
         self._fk = ForwardKinematics(urdf_path, device)
 
-        # Key body names (same as in G1 config)
+        # Key body names (same order as G1 config key_bodies)
         self._body_link_list = [
-            "pelvis",
             "left_rubber_hand", "right_rubber_hand",
             "left_ankle_roll_link", "right_ankle_roll_link",
             "left_knee_link", "right_knee_link",
@@ -426,9 +425,20 @@ class CMGMotionLib:
         """Return number of 'motions' - for CMG this is essentially infinite."""
         return 1000  # Return a large number for compatibility
 
-    def get_motion_length(self, motion_ids: torch.Tensor) -> torch.Tensor:
-        """Return episode length for all motion IDs."""
-        return torch.full_like(motion_ids, self._episode_length_s, dtype=torch.float)
+    def get_motion_length(self, motion_ids) -> torch.Tensor:
+        """Return episode length for all motion IDs.
+
+        Args:
+            motion_ids: Can be int, scalar, or tensor
+        Returns:
+            Episode length as tensor or scalar
+        """
+        if isinstance(motion_ids, int):
+            return torch.tensor(self._episode_length_s, device=self._device)
+        elif isinstance(motion_ids, torch.Tensor):
+            return torch.full_like(motion_ids, self._episode_length_s, dtype=torch.float)
+        else:
+            return torch.tensor(self._episode_length_s, device=self._device)
 
     def get_total_length(self) -> float:
         """Return total motion length."""
@@ -491,11 +501,13 @@ class CMGMotionLib:
             root_ang_vel = torch.zeros(batch_size, 3, device=self._device)
             dof_pos = torch.zeros(batch_size, 23, device=self._device)
             dof_vel = torch.zeros(batch_size, 23, device=self._device)
-            local_key_body_pos = torch.zeros(batch_size, len(self._body_link_list) - 1, 3, device=self._device)
+            local_key_body_pos = torch.zeros(batch_size, len(self._body_link_list), 3, device=self._device)
 
             for i in range(batch_size):
-                env_idx = i % self._num_envs
-                step_idx = i // self._num_envs
+                # Note: flatten order is (num_envs, num_steps) -> row-major
+                # so env_idx = i // num_steps, step_idx = i % num_steps
+                env_idx = i // num_steps
+                step_idx = i % num_steps
 
                 # Get time for this query
                 query_time = motion_times[i].item()

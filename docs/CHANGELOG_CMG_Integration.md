@@ -173,9 +173,22 @@ bash train_teacher_cmg.sh fast cmg_fast_v1 cuda:0
 
 ---
 
+## 修复记录
+
+### 2026-01-29 对齐问题修复
+
+**问题**: CMGMotionLib 返回的 body_pos 形状 `(batch, 9, 3)` 与 `_ref_body_pos` 期望的 `(batch, num_rigid_bodies, 3)` 不匹配
+
+**修复**:
+1. `humanoid_mimic.py` - 在 CMG 模式下，body_pos 直接赋值到 `_key_body_ids` 对应的位置
+2. `cmg_motion_lib.py` - 移除 `_body_link_list` 中的 "pelvis"，保持与 config 中 `key_bodies` 顺序一致
+
+---
+
 ## 待验证
 
 - [ ] CMGMotionLib 加载和运行
 - [ ] 正运动学计算正确性
 - [ ] 三档速度训练效果
 - [ ] 轨迹缓冲区重生成逻辑
+- [ ] body_pos 形状对齐

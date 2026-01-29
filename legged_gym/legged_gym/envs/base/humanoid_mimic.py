@@ -137,7 +137,14 @@ class HumanoidMimic(HumanoidChar):
         self._ref_root_ang_vel[env_ids] = root_ang_vel
         self._ref_dof_pos[env_ids] = dof_pos
         self._ref_dof_vel[env_ids] = dof_vel
-        self._ref_body_pos[env_ids] = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
+
+        # CMG returns only key bodies, need to assign to correct indices
+        global_body_pos = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
+        if getattr(self, '_use_cmg', False):
+            # CMG returns 9 key bodies directly, assign to _key_body_ids positions
+            self._ref_body_pos[env_ids.unsqueeze(-1), self._key_body_ids] = global_body_pos
+        else:
+            self._ref_body_pos[env_ids] = global_body_pos
     
     def _get_motion_times(self, env_ids=None):
         if env_ids is None:
@@ -152,14 +159,21 @@ class HumanoidMimic(HumanoidChar):
         root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, body_pos = self._motion_lib.calc_motion_frame(motion_ids, motion_times)
         root_pos[:, 2] += self.cfg.motion.height_offset
         root_pos[:, :2] += self.episode_init_origin[:, :2]
-        
+
         self._ref_root_pos[:] = root_pos
         self._ref_root_rot[:] = root_rot
         self._ref_root_vel[:] = root_vel
         self._ref_root_ang_vel[:] = root_ang_vel
         self._ref_dof_pos[:] = dof_pos
         self._ref_dof_vel[:] = dof_vel
-        self._ref_body_pos[:] = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
+
+        # CMG returns only key bodies, need to assign to correct indices
+        global_body_pos = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
+        if getattr(self, '_use_cmg', False):
+            # CMG returns 9 key bodies directly, assign to _key_body_ids positions
+            self._ref_body_pos[:, self._key_body_ids] = global_body_pos
+        else:
+            self._ref_body_pos[:] = global_body_pos
             
     def _reset_root_states(self, env_ids, root_vel=None, root_quat=None, root_pos=None, root_ang_vel=None):
         """ Resets ROOT states position and velocities of selected environmments

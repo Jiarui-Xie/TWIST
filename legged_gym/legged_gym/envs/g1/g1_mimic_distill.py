@@ -122,16 +122,23 @@ class G1MimicDistill(HumanoidMimic):
         
         root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, body_pos = self._motion_lib.calc_motion_frame(motion_ids, motion_times)
         root_pos[:, 2] += self.cfg.motion.height_offset
-        
+
         self._ref_root_pos[env_ids] = root_pos
         self._ref_root_rot[env_ids] = root_rot
         self._ref_root_vel[env_ids] = root_vel
         self._ref_root_ang_vel[env_ids] = root_ang_vel
         self._ref_dof_pos[env_ids] = dof_pos
         self._ref_dof_vel[env_ids] = dof_vel
-        if body_pos.shape[1] != self._ref_body_pos[env_ids].shape[1]:
-            body_pos = g1_body_from_38_to_52(body_pos)
-        self._ref_body_pos[env_ids] = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
+
+        # Handle body_pos based on motion source
+        if getattr(self, '_use_cmg', False):
+            # CMG returns only 9 key body positions - place them directly at key_body_ids
+            global_body_pos = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
+            self._ref_body_pos[env_ids[:, None], self._key_body_ids] = global_body_pos
+        else:
+            if body_pos.shape[1] != self._ref_body_pos[env_ids].shape[1]:
+                body_pos = g1_body_from_38_to_52(body_pos)
+            self._ref_body_pos[env_ids] = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
     
     
     def _update_ref_motion(self):
@@ -140,16 +147,23 @@ class G1MimicDistill(HumanoidMimic):
         root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, body_pos = self._motion_lib.calc_motion_frame(motion_ids, motion_times)
         root_pos[:, 2] += self.cfg.motion.height_offset
         root_pos[:, :2] += self.episode_init_origin[:, :2]
-        
+
         self._ref_root_pos[:] = root_pos
         self._ref_root_rot[:] = root_rot
         self._ref_root_vel[:] = root_vel
         self._ref_root_ang_vel[:] = root_ang_vel
         self._ref_dof_pos[:] = dof_pos
         self._ref_dof_vel[:] = dof_vel
-        if body_pos.shape[1] != self._ref_body_pos.shape[1]:
-            body_pos = g1_body_from_38_to_52(body_pos)
-        self._ref_body_pos[:] = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
+
+        # Handle body_pos based on motion source
+        if getattr(self, '_use_cmg', False):
+            # CMG returns only 9 key body positions - place them directly at key_body_ids
+            global_body_pos = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
+            self._ref_body_pos[:, self._key_body_ids] = global_body_pos
+        else:
+            if body_pos.shape[1] != self._ref_body_pos.shape[1]:
+                body_pos = g1_body_from_38_to_52(body_pos)
+            self._ref_body_pos[:] = convert_to_global_root_body_pos(root_pos=root_pos, root_rot=root_rot, body_pos=body_pos)
         
     def _update_motion_difficulty(self, env_ids):
         if self.obs_type == 'priv':
