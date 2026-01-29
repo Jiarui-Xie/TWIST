@@ -298,6 +298,15 @@ class HumanoidCharCfg(BaseConfig):
         height_offset = 0.0
         reset_consec_frames = 50
 
+        # CMG (Conditional Motion Generator) options
+        use_cmg = False
+        cmg_model_path = ""
+        cmg_data_path = ""
+        cmg_dt = 0.02  # CMG operates at 50 Hz
+        cmg_vx_range = [0.5, 1.5]  # Forward velocity range (m/s)
+        cmg_vy_range = [-0.3, 0.3]  # Lateral velocity range (m/s)
+        cmg_yaw_range = [-0.5, 0.5]  # Yaw rate range (rad/s)
+
 class HumanoidCharCfgPPO(BaseConfig):
     seed = 1
     class policy:

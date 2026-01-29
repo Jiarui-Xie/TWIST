@@ -462,17 +462,17 @@ class G1MimicPrivCfgPPO(HumanoidMimicCfgPPO):
 
 class G1MimicStuRLCfgDAgger(G1MimicStuRLCfg):
     seed = 1
-    
+
     class teachercfg(G1MimicPrivCfgPPO):
         pass
-    
+
     class runner(G1MimicPrivCfgPPO.runner):
         policy_class_name = 'ActorCriticMimic'
         algorithm_class_name = 'DaggerPPO'
         runner_class_name = 'OnPolicyDaggerRunner'
         max_iterations = 30_002
         warm_iters = 100
-        
+
         # logging
         save_interval = 500
         experiment_name = 'test'
@@ -481,7 +481,7 @@ class G1MimicStuRLCfgDAgger(G1MimicStuRLCfg):
         load_run = -1
         checkpoint = -1
         resume_path = None
-        
+
         teacher_experiment_name = 'test'
         teacher_proj_name = 'g1_priv_mimic'
         teacher_checkpoint = -1
@@ -491,9 +491,9 @@ class G1MimicStuRLCfgDAgger(G1MimicStuRLCfg):
         grad_penalty_coef_schedule = [0.00, 0.00, 700, 1000]
         std_schedule = [1.0, 0.4, 4000, 1500]
         entropy_coef = 0.005
-        
+
         dagger_coef_anneal_steps = 60000  # Total steps to anneal dagger_coef to dagger_coef_min
-        
+
         dagger_coef = 0.1
         dagger_coef_min = 0.01  # Minimum value for dagger_coef
         # dagger_coef = 0.0
@@ -508,3 +508,117 @@ class G1MimicStuRLCfgDAgger(G1MimicStuRLCfg):
         activation = 'silu'
         layer_norm = True
         motion_latent_dim = 128
+
+
+# ==================== CMG-based Configurations ====================
+
+class G1MimicCMGBaseCfg(G1MimicPrivCfg):
+    """Base configuration for CMG-based motion generation."""
+
+    class motion(G1MimicPrivCfg.motion):
+        # Enable CMG motion generation
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+
+        # CMG operates at 50 Hz
+        cmg_dt = 0.02
+
+        # Default velocity ranges (overridden by speed-specific configs)
+        cmg_vx_range = [0.5, 1.5]
+        cmg_vy_range = [-0.3, 0.3]
+        cmg_yaw_range = [-0.5, 0.5]
+
+        # Disable motion curriculum for CMG (not applicable)
+        motion_curriculum = False
+
+    class env(G1MimicPrivCfg.env):
+        # For CMG, we don't track root position since it's generated
+        track_root = False
+        # Random reset not applicable for CMG
+        rand_reset = False
+
+
+class G1MimicCMGSlowCfg(G1MimicCMGBaseCfg):
+    """Slow speed training configuration (1 m/s)."""
+
+    class motion(G1MimicCMGBaseCfg.motion):
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_dt = 0.02
+        motion_curriculum = False
+
+        # Slow speed: ~1 m/s forward
+        cmg_vx_range = [0.5, 1.5]
+        cmg_vy_range = [-0.3, 0.3]
+        cmg_yaw_range = [-0.5, 0.5]
+
+
+class G1MimicCMGMediumCfg(G1MimicCMGBaseCfg):
+    """Medium speed training configuration (2 m/s)."""
+
+    class motion(G1MimicCMGBaseCfg.motion):
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_dt = 0.02
+        motion_curriculum = False
+
+        # Medium speed: ~2 m/s forward
+        cmg_vx_range = [1.5, 2.5]
+        cmg_vy_range = [-0.5, 0.5]
+        cmg_yaw_range = [-0.8, 0.8]
+
+
+class G1MimicCMGFastCfg(G1MimicCMGBaseCfg):
+    """Fast speed training configuration (3 m/s)."""
+
+    class motion(G1MimicCMGBaseCfg.motion):
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_dt = 0.02
+        motion_curriculum = False
+
+        # Fast speed: ~3 m/s forward
+        cmg_vx_range = [2.5, 3.5]
+        cmg_vy_range = [-0.5, 0.5]
+        cmg_yaw_range = [-1.0, 1.0]
+
+
+# PPO configurations for CMG environments
+class G1MimicCMGSlowCfgPPO(G1MimicPrivCfgPPO):
+    seed = 1
+
+    class runner(G1MimicPrivCfgPPO.runner):
+        policy_class_name = 'ActorCriticMimic'
+        algorithm_class_name = 'PPO'
+        runner_class_name = 'OnPolicyRunnerMimic'
+        max_iterations = 30_002
+        save_interval = 500
+        experiment_name = 'cmg_slow'
+
+
+class G1MimicCMGMediumCfgPPO(G1MimicPrivCfgPPO):
+    seed = 1
+
+    class runner(G1MimicPrivCfgPPO.runner):
+        policy_class_name = 'ActorCriticMimic'
+        algorithm_class_name = 'PPO'
+        runner_class_name = 'OnPolicyRunnerMimic'
+        max_iterations = 30_002
+        save_interval = 500
+        experiment_name = 'cmg_medium'
+
+
+class G1MimicCMGFastCfgPPO(G1MimicPrivCfgPPO):
+    seed = 1
+
+    class runner(G1MimicPrivCfgPPO.runner):
+        policy_class_name = 'ActorCriticMimic'
+        algorithm_class_name = 'PPO'
+        runner_class_name = 'OnPolicyRunnerMimic'
+        max_iterations = 30_002
+        save_interval = 500
+        experiment_name = 'cmg_fast'
