@@ -7,7 +7,7 @@ class G1MimicPrivCfg(HumanoidMimicCfg):
         tar_obs_steps = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45,
                          50, 55, 60, 65, 70, 75, 80, 85, 90, 95,]
         
-        num_envs = 4096
+        num_envs = 512
         num_actions = 23
         obs_type = 'priv' # 'student'
         n_priv_latent = 4 + 1 + 2*num_actions
@@ -187,12 +187,12 @@ class G1MimicPrivCfg(HumanoidMimicCfg):
         regularization_scale_curriculum = False
         regularization_scale_gamma = 0.0001
         class scales:
-            tracking_joint_dof = 0.6
-            tracking_joint_vel = 0.2
-            tracking_root_pose = 0.6
-            tracking_root_vel = 1.0
+            tracking_joint_dof = 1.5
+            tracking_joint_vel = 0.5
+            tracking_root_pose = 0.0  # Disabled for CMG (no root tracking)
+            tracking_root_vel = 0.5
             # tracking_keybody_pos = 0.6
-            tracking_keybody_pos = 2.0
+            tracking_keybody_pos = 0.0  # Disabled for CMG (simplified reward)
             
             # alive = 0.5
 
@@ -292,7 +292,15 @@ class G1MimicPrivCfg(HumanoidMimicCfg):
         motion_file = f"{LEGGED_GYM_ROOT_DIR}/motion_data_configs/twist_dataset.yaml"
         
         reset_consec_frames = 30
-    
+        
+        # CMG (Conditional Motion Generator) configuration
+        use_cmg = False  # Set to True to use CMG instead of motion library
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_velocity = [1.5, 0.0, 0.0]  # [vx, vy, yaw] fixed velocity command
+        cmg_horizon = 2.0  # Generate 2 seconds of future motion
+        cmg_fps = 50  # CMG output frame rate
+
 
 class G1MimicStuCfg(G1MimicPrivCfg):
     class env(G1MimicPrivCfg.env):
@@ -508,3 +516,82 @@ class G1MimicStuRLCfgDAgger(G1MimicStuRLCfg):
         activation = 'silu'
         layer_norm = True
         motion_latent_dim = 128
+
+
+# ==================== CMG-based Teacher Config ====================
+class G1MimicCMGCfg(G1MimicPrivCfg):
+    """Configuration for training teacher with CMG-generated motion"""
+    
+    class env(G1MimicPrivCfg.env):
+        tar_obs_steps = [1, 5, 10, 15, 20, 25, 30, 35, 40, 45,
+                         50, 55, 60, 65, 70, 75, 80, 85, 90, 95,]
+        
+        num_envs = 512
+        num_actions = 23
+        obs_type = 'priv'
+        n_priv_latent = 4 + 1 + 2*num_actions
+        extra_critic_obs = 3
+        n_priv = 0
+        
+        n_proprio = 3 + 2 + 3*num_actions
+        n_priv_mimic_obs = len(tar_obs_steps) * (8 + num_actions + 3*9)
+        n_mimic_obs = 8 + 23
+        n_priv_info = 3 + 1 + 3*9 + 2 + 4 + 1 + 2*num_actions
+        history_len = 10
+        
+        n_obs_single = n_priv_mimic_obs + n_proprio + n_priv_info
+        n_priv_obs_single = n_priv_mimic_obs + n_proprio + n_priv_info
+        
+        num_observations = n_obs_single
+        num_privileged_obs = n_priv_obs_single
+
+        episode_length_s = 2.0  # CMG horizon is 2s
+        
+        # Disable pose termination for CMG (no keybody tracking)
+        pose_termination = False
+        track_root = False
+        
+    class rewards(G1MimicPrivCfg.rewards):
+        class scales:
+            # CMG-specific reward weights: focus on joint tracking
+            tracking_joint_dof = 2.0
+            tracking_joint_vel = 0.8
+            tracking_root_pose = 0.0  # Disabled
+            tracking_root_vel = 0.3
+            tracking_keybody_pos = 0.0  # Disabled
+            
+            feet_slip = -0.1
+            feet_contact_forces = -5e-4
+            feet_stumble = -1.25
+            
+            dof_pos_limits = -5.0
+            dof_torque_limits = -1.0
+            
+            dof_vel = -1e-4
+            dof_acc = -5e-8
+            action_rate = -0.01
+            
+            feet_air_time = 5.0
+            ang_vel_xy = -0.01
+            
+            ankle_dof_acc = -5e-8 * 2
+            ankle_dof_vel = -1e-4 * 2
+    
+    class motion(G1MimicPrivCfg.motion):
+        motion_curriculum = False  # No curriculum for CMG
+        
+        # CMG configuration
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_velocity = [1.5, 0.0, 0.0]  # [vx, vy, yaw] - 1.5 m/s forward
+        cmg_horizon = 2.0  # Generate 2 seconds of future motion
+        cmg_fps = 50
+
+
+class G1MimicCMGCfgPPO(G1MimicPrivCfgPPO):
+    """PPO config for CMG-based teacher training"""
+    
+    class runner(G1MimicPrivCfgPPO.runner):
+        max_iterations = 10_000
+        save_interval = 500

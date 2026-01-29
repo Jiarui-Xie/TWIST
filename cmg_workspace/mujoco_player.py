@@ -32,7 +32,7 @@ class MotionVisualizer:
     Supports different file formats and provides options for playback control.
     """
     # Constants
-    DEFAULT_MODEL_PATH = '/root/gpufree-data/unitree_ws/unitree_mujoco/unitree_robots/g1/g1_29dof.xml'
+    DEFAULT_MODEL_PATH = '/home/jaxon/TWIST/assets/g1/g1_29dof_rev_1_0.xml'
     JOINT_NAMES = [
         'left_hip_pitch_joint', 'left_hip_roll_joint', 'left_hip_yaw_joint', 
         'left_knee_joint', 'left_ankle_pitch_joint', 'left_ankle_roll_joint', 
@@ -480,7 +480,7 @@ def parse_args():
     parser.add_argument('--file-type', type=str, choices=['auto', 'stage1', 'stage2'], 
                         default='auto', help='Type of motion file')
     
-    parser.add_argument('--model', type=str, default="/root/gpufree-data/unitree_ws/unitree_mujoco/unitree_robots/g1/g1_29dof.xml",
+    parser.add_argument('--model', type=str, default=None,
                         help='Path to MuJoCo XML model file')
     
     parser.add_argument('--no-loop', action='store_true',
