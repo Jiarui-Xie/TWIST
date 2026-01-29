@@ -12,7 +12,11 @@ import numpy as np
 from typing import Optional, List, Tuple
 
 import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'cmg_workspace'))
+# 添加 cmg_workspace 到 Python 路径
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+_cmg_workspace = os.path.abspath(os.path.join(_current_dir, '..', '..', '..', 'cmg_workspace'))
+if _cmg_workspace not in sys.path:
+    sys.path.insert(0, _cmg_workspace)
 
 from module.cmg import CMG
 from pose.utils.forward_kinematics import ForwardKinematics
