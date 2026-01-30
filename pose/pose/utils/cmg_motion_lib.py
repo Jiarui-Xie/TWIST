@@ -199,12 +199,8 @@ class CMGMotionLib:
         """Get initial motion states from training data samples."""
         # Randomly select initial states from training samples
         indices = np.random.randint(0, len(self._init_samples), size=n)
-        init_motions = []
-        for idx in indices:
-            # Get first frame of each sample
-            motion = self._init_samples[idx]["motion"][0]  # [58]
-            init_motions.append(motion)
-        init_motions = np.stack(init_motions, axis=0)
+        # Vectorized extraction using list comprehension and stack
+        init_motions = np.stack([self._init_samples[idx]["motion"][0] for idx in indices], axis=0)
         return torch.from_numpy(init_motions).float().to(self._device)
 
     def _normalize_motion(self, motion: torch.Tensor) -> torch.Tensor:
@@ -271,7 +267,7 @@ class CMGMotionLib:
 
     @torch.no_grad()
     def _generate_trajectory(self, env_ids: torch.Tensor):
-        """Pre-generate trajectory buffer for specified environments."""
+        """Pre-generate trajectory buffer for specified environments (vectorized)."""
         if len(env_ids) == 0:
             return
 
@@ -283,37 +279,40 @@ class CMGMotionLib:
         commands_norm = self._normalize_command(commands)
 
         # Store initial position/rotation
-        root_pos = self._root_pos[env_ids].clone()
-        root_yaw = self._root_yaw[env_ids].clone()
+        root_pos = self._root_pos[env_ids].clone()  # (n, 3)
+        root_yaw = self._root_yaw[env_ids].clone()  # (n,)
 
-        # Generate trajectory
+        # Extract velocity components
+        vx_local = commands[:, 0]  # (n,)
+        vy_local = commands[:, 1]  # (n,)
+        yaw_rate = commands[:, 2]  # (n,)
+
+        # Generate trajectory - vectorized over environments
         for frame in range(self.TRAJECTORY_BUFFER_FRAMES):
             # Store current state
             self._trajectory_buffer[env_ids, frame] = current_norm
 
-            # Compute root state for this frame
+            # Compute root state for this frame (vectorized)
             time_offset = frame * self._dt
-            for i, env_id in enumerate(env_ids):
-                # Update root position
-                vx_local = commands[i, 0]
-                vy_local = commands[i, 1]
-                yaw_rate = commands[i, 2]
 
-                avg_yaw = root_yaw[i] + yaw_rate * time_offset * 0.5
-                cos_yaw = torch.cos(avg_yaw)
-                sin_yaw = torch.sin(avg_yaw)
+            # Compute yaw angles
+            avg_yaw = root_yaw + yaw_rate * time_offset * 0.5  # (n,)
+            new_yaw = root_yaw + yaw_rate * time_offset  # (n,)
 
-                self._root_pos_buffer[env_id, frame, 0] = root_pos[i, 0] + (vx_local * cos_yaw - vy_local * sin_yaw) * time_offset
-                self._root_pos_buffer[env_id, frame, 1] = root_pos[i, 1] + (vx_local * sin_yaw + vy_local * cos_yaw) * time_offset
-                self._root_pos_buffer[env_id, frame, 2] = self._root_height
+            cos_yaw = torch.cos(avg_yaw)  # (n,)
+            sin_yaw = torch.sin(avg_yaw)  # (n,)
 
-                # Update root rotation
-                new_yaw = root_yaw[i] + yaw_rate * time_offset
-                half_yaw = new_yaw * 0.5
-                self._root_rot_buffer[env_id, frame, 0] = torch.cos(half_yaw)
-                self._root_rot_buffer[env_id, frame, 1] = 0.0
-                self._root_rot_buffer[env_id, frame, 2] = 0.0
-                self._root_rot_buffer[env_id, frame, 3] = torch.sin(half_yaw)
+            # Update root position buffer (vectorized)
+            self._root_pos_buffer[env_ids, frame, 0] = root_pos[:, 0] + (vx_local * cos_yaw - vy_local * sin_yaw) * time_offset
+            self._root_pos_buffer[env_ids, frame, 1] = root_pos[:, 1] + (vx_local * sin_yaw + vy_local * cos_yaw) * time_offset
+            self._root_pos_buffer[env_ids, frame, 2] = self._root_height
+
+            # Update root rotation buffer (vectorized)
+            half_yaw = new_yaw * 0.5  # (n,)
+            self._root_rot_buffer[env_ids, frame, 0] = torch.cos(half_yaw)
+            self._root_rot_buffer[env_ids, frame, 1] = 0.0
+            self._root_rot_buffer[env_ids, frame, 2] = 0.0
+            self._root_rot_buffer[env_ids, frame, 3] = torch.sin(half_yaw)
 
             # CMG forward pass for next state
             next_motion_norm = self._cmg_model(current_norm, commands_norm)
@@ -486,66 +485,51 @@ class CMGMotionLib:
             # Simple case: return current frame
             return self._calc_current_frame()
         else:
-            # Tiled case: used by _get_mimic_obs for future frames
+            # Tiled case: used by _get_mimic_obs for future frames (vectorized)
             # motion_times contains offsets from the start of episode
-            # We need to compute the frame index in our buffer
 
             # Determine how many timesteps per environment
             num_steps = batch_size // self._num_envs
 
-            # Initialize output tensors
-            root_pos = torch.zeros(batch_size, 3, device=self._device)
-            root_rot = torch.zeros(batch_size, 4, device=self._device)
-            root_rot[:, 0] = 1.0
+            # Compute env indices for each batch element
+            # Flatten order is (num_envs, num_steps) -> so batch index i maps to env i // num_steps
+            batch_indices = torch.arange(batch_size, device=self._device)
+            env_indices = batch_indices // num_steps  # (batch_size,)
+
+            # Get current times and buffer frame indices for all envs in batch
+            current_times = self._motion_times[env_indices]  # (batch_size,)
+            current_frames = self._buffer_frame_idx[env_indices]  # (batch_size,)
+
+            # Calculate time offsets and target frames
+            time_offsets = motion_times - current_times  # (batch_size,)
+            frame_offsets = (time_offsets / self._dt).long()  # (batch_size,)
+            target_frames = (current_frames + frame_offsets).clamp(0, self.TRAJECTORY_BUFFER_FRAMES - 1)  # (batch_size,)
+
+            # Get motion states from buffer using advanced indexing
+            motion_norm = self._trajectory_buffer[env_indices, target_frames]  # (batch_size, motion_dim)
+            motion = self._denormalize_motion(motion_norm)  # (batch_size, motion_dim)
+            dof_pos, dof_vel = self._map_29_to_23(motion)  # (batch_size, 23) each
+
+            # Get root states from buffer
+            root_pos = self._root_pos_buffer[env_indices, target_frames]  # (batch_size, 3)
+            root_rot = self._root_rot_buffer[env_indices, target_frames]  # (batch_size, 4)
+
+            # Get commands for each batch element
+            commands = self._commands[env_indices]  # (batch_size, 3)
+            vx_local = commands[:, 0]
+            vy_local = commands[:, 1]
+            yaw_rate = commands[:, 2]
+
+            # Compute velocities from commands (vectorized)
+            cos_yaw = root_rot[:, 0]**2 - root_rot[:, 3]**2  # cos(yaw) from quaternion
+            sin_yaw = 2 * root_rot[:, 0] * root_rot[:, 3]    # sin(yaw) from quaternion
+
             root_vel = torch.zeros(batch_size, 3, device=self._device)
+            root_vel[:, 0] = vx_local * cos_yaw - vy_local * sin_yaw
+            root_vel[:, 1] = vx_local * sin_yaw + vy_local * cos_yaw
+
             root_ang_vel = torch.zeros(batch_size, 3, device=self._device)
-            dof_pos = torch.zeros(batch_size, 23, device=self._device)
-            dof_vel = torch.zeros(batch_size, 23, device=self._device)
-            local_key_body_pos = torch.zeros(batch_size, len(self._body_link_list), 3, device=self._device)
-
-            for i in range(batch_size):
-                # Note: flatten order is (num_envs, num_steps) -> row-major
-                # so env_idx = i // num_steps, step_idx = i % num_steps
-                env_idx = i // num_steps
-                step_idx = i % num_steps
-
-                # Get time for this query
-                query_time = motion_times[i].item()
-                current_time = self._motion_times[env_idx].item()
-
-                # Calculate relative time offset (query_time is absolute, need relative)
-                time_offset = query_time - current_time
-
-                # Convert to frame index in buffer (relative to current frame)
-                current_frame = self._buffer_frame_idx[env_idx].item()
-                frame_offset = int(time_offset / self._dt)
-                target_frame = current_frame + frame_offset
-
-                # Clamp to valid buffer range
-                target_frame = max(0, min(target_frame, self.TRAJECTORY_BUFFER_FRAMES - 1))
-
-                # Get motion state from buffer
-                motion_norm = self._trajectory_buffer[env_idx, target_frame]
-                motion = self._denormalize_motion(motion_norm.unsqueeze(0))
-                pos_23, vel_23 = self._map_29_to_23(motion)
-                dof_pos[i] = pos_23.squeeze(0)
-                dof_vel[i] = vel_23.squeeze(0)
-
-                # Get root state from buffer
-                root_pos[i] = self._root_pos_buffer[env_idx, target_frame]
-                root_rot[i] = self._root_rot_buffer[env_idx, target_frame]
-
-                # Compute velocities from commands
-                vx_local = self._commands[env_idx, 0]
-                vy_local = self._commands[env_idx, 1]
-                yaw_rate = self._commands[env_idx, 2]
-
-                cos_yaw = root_rot[i, 0]**2 - root_rot[i, 3]**2  # cos(yaw) from quaternion
-                sin_yaw = 2 * root_rot[i, 0] * root_rot[i, 3]    # sin(yaw) from quaternion
-
-                root_vel[i, 0] = vx_local * cos_yaw - vy_local * sin_yaw
-                root_vel[i, 1] = vx_local * sin_yaw + vy_local * cos_yaw
-                root_ang_vel[i, 2] = yaw_rate
+            root_ang_vel[:, 2] = yaw_rate
 
             # Compute key body positions using forward kinematics
             local_key_body_pos = self._fk.compute_body_positions(root_pos, root_rot, dof_pos)
