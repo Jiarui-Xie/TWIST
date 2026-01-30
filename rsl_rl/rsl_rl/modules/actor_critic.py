@@ -83,21 +83,22 @@ class ActorCritic(nn.Module):
                         activation='elu',
                         init_noise_std=1.0,
                         fix_action_std=False,
+                        priv_encoder_dims=None,
+                        tanh_encoder_output=False,
+                        obs_context_len=None,
                         **kwargs):
         if kwargs:
             print("ActorCritic.__init__ got unexpected arguments, which will be ignored: " + str([key for key in kwargs.keys()]))
         super().__init__()
 
         self.fix_action_std = fix_action_std
-        
-        self.kwargs = kwargs
-        priv_encoder_dims= kwargs['priv_encoder_dims']
+
         activation = get_activation(activation)
-        
+
         self.actor = Actor(num_prop=num_critic_obs, # all priv info
-                           num_actions=num_actions, 
-                           actor_hidden_dims=actor_hidden_dims, 
-                           activation=activation, tanh_encoder_output=kwargs['tanh_encoder_output'])
+                           num_actions=num_actions,
+                           actor_hidden_dims=actor_hidden_dims,
+                           activation=activation, tanh_encoder_output=tanh_encoder_output)
         
         # Value function
         critic_layers = []

@@ -33,6 +33,7 @@ import os
 from collections import deque
 import statistics
 from rich import print
+from tqdm import tqdm
 
 # from torch.utils.tensorboard import SummaryWriter
 import torch
@@ -173,7 +174,7 @@ class OnPolicyRunner:
         tot_iter = self.current_learning_iteration + num_learning_iterations
         self.start_learning_iteration = copy(self.current_learning_iteration)
 
-        for it in range(self.current_learning_iteration, tot_iter):
+        for it in tqdm(range(self.current_learning_iteration, tot_iter), desc="Training", initial=self.current_learning_iteration, total=tot_iter):
             start = time.time()
             hist_encoding = it % self.dagger_update_freq == 0
             # Rollout

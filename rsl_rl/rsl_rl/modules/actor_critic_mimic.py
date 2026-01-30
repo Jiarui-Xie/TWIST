@@ -138,23 +138,25 @@ class ActorCriticMimic(nn.Module):
                 fix_action_std=False,
                 action_std=None,
                 layer_norm=False,
+                tanh_encoder_output=False,
+                priv_encoder_dims=None,
+                obs_context_len=None,
                 **kwargs):
         if kwargs:
-            print("ActorCritic.__init__ got unexpected arguments, which will be ignored: " + str([key for key in kwargs.keys()]))
+            print("ActorCriticMimic.__init__ got unexpected arguments, which will be ignored: " + str([key for key in kwargs.keys()]))
         super().__init__()
 
         self.fix_action_std = fix_action_std
-        
-        self.kwargs = kwargs
+
         activation = get_activation(activation)
-        
+
         self.actor = Actor(num_observations=num_observations, # all priv info
-                           num_actions=num_actions, 
+                           num_actions=num_actions,
                            num_motion_observations=num_motion_observations,
                            num_motion_steps=num_motion_steps,
                            motion_latent_dim=motion_latent_dim,
-                           actor_hidden_dims=actor_hidden_dims, 
-                           activation=activation, layer_norm=layer_norm, tanh_encoder_output=kwargs['tanh_encoder_output'])
+                           actor_hidden_dims=actor_hidden_dims,
+                           activation=activation, layer_norm=layer_norm, tanh_encoder_output=tanh_encoder_output)
         self.num_motion_observations = num_motion_observations
         self.num_single_motion_obs = int(num_motion_observations / num_motion_steps)
         
