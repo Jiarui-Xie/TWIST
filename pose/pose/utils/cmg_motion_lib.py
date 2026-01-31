@@ -460,19 +460,26 @@ class CMGMotionLib:
     def calc_motion_frame(
         self,
         motion_ids: torch.Tensor,
-        motion_times: torch.Tensor
+        motion_times: torch.Tensor,
+        env_ids: Optional[torch.Tensor] = None
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
                torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         Calculate motion frame for given IDs and times.
 
-        This method handles both:
-        1. Simple queries (batch_size == num_envs): returns current state
-        2. Tiled queries (batch_size > num_envs): used by _get_mimic_obs for future frames
+        This method handles:
+        1. Simple queries (batch_size == num_envs): returns current state for all envs
+        2. Partial queries (env_ids provided): returns current state for specified envs
+        3. Tiled queries (batch_size > num_envs): used by _get_mimic_obs for future frames
+
+        Args:
+            motion_ids: Motion IDs (unused for CMG, kept for API compatibility)
+            motion_times: Time offsets for each query
+            env_ids: Optional environment indices for partial queries (e.g., during reset)
 
         Returns:
             root_pos: (batch_size, 3)
-            root_rot: (batch_size, 4) - quaternion [w, x, y, z]
+            root_rot: (batch_size, 4) - quaternion [x, y, z, w] (Isaac Gym convention)
             root_vel: (batch_size, 3)
             root_ang_vel: (batch_size, 3)
             dof_pos: (batch_size, 23)
@@ -482,8 +489,11 @@ class CMGMotionLib:
         batch_size = motion_ids.shape[0]
 
         if batch_size == self._num_envs:
-            # Simple case: return current frame
+            # Simple case: return current frame for all envs
             return self._calc_current_frame()
+        elif env_ids is not None and batch_size == len(env_ids) and batch_size < self._num_envs:
+            # Partial query case: return current frame for specified envs only
+            return self._calc_partial_frame(env_ids)
         else:
             # Tiled case: used by _get_mimic_obs for future frames (vectorized)
             # motion_times contains offsets from the start of episode
@@ -534,7 +544,10 @@ class CMGMotionLib:
             # Compute key body positions using forward kinematics
             local_key_body_pos = self._fk.compute_body_positions(root_pos, root_rot, dof_pos)
 
-            return root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos
+            # Convert quaternion from wxyz (CMG internal) to xyzw (Isaac Gym convention)
+            root_rot_xyzw = torch.cat([root_rot[:, 1:], root_rot[:, :1]], dim=-1)
+
+            return root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos
 
     def _calc_current_frame(
         self
@@ -573,7 +586,52 @@ class CMGMotionLib:
         # Compute key body positions using forward kinematics
         local_key_body_pos = self._fk.compute_body_positions(root_pos, root_rot, dof_pos)
 
-        return root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos
+        # Convert quaternion from wxyz (CMG internal) to xyzw (Isaac Gym convention)
+        root_rot_xyzw = torch.cat([root_rot[:, 1:], root_rot[:, :1]], dim=-1)
+
+        return root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos
+
+    def _calc_partial_frame(
+        self,
+        env_ids: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor,
+               torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Calculate motion frame for a subset of environments (used during partial reset)."""
+        n = len(env_ids)
+        frame_indices = self._buffer_frame_idx[env_ids].clamp(0, self.TRAJECTORY_BUFFER_FRAMES - 1)
+
+        motion_norm = self._trajectory_buffer[env_ids, frame_indices]
+        motion = self._denormalize_motion(motion_norm)
+
+        # Map 29 DOF to 23 DOF
+        dof_pos, dof_vel = self._map_29_to_23(motion)
+
+        # Get root state from buffer
+        root_pos = self._root_pos_buffer[env_ids, frame_indices]
+        root_rot = self._root_rot_buffer[env_ids, frame_indices]
+
+        # Compute root velocities from commands
+        cos_yaw = torch.cos(self._root_yaw[env_ids])
+        sin_yaw = torch.sin(self._root_yaw[env_ids])
+
+        vx_local = self._commands[env_ids, 0]
+        vy_local = self._commands[env_ids, 1]
+
+        root_vel = torch.zeros(n, 3, device=self._device)
+        root_vel[:, 0] = vx_local * cos_yaw - vy_local * sin_yaw
+        root_vel[:, 1] = vx_local * sin_yaw + vy_local * cos_yaw
+        root_vel[:, 2] = 0.0
+
+        root_ang_vel = torch.zeros(n, 3, device=self._device)
+        root_ang_vel[:, 2] = self._commands[env_ids, 2]  # yaw rate
+
+        # Compute key body positions using forward kinematics
+        local_key_body_pos = self._fk.compute_body_positions(root_pos, root_rot, dof_pos)
+
+        # Convert quaternion from wxyz (CMG internal) to xyzw (Isaac Gym convention)
+        root_rot_xyzw = torch.cat([root_rot[:, 1:], root_rot[:, :1]], dim=-1)
+
+        return root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos
 
     def get_key_body_idx(self, key_body_names: List[str]) -> List[int]:
         """Get indices of key bodies by name."""

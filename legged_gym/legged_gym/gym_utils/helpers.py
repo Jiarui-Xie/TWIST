@@ -209,6 +209,7 @@ def get_args():
 
         {"name": "--web", "action": "store_true", "default": False, "help": "if use web viewer"},
         {"name": "--no_wandb", "action": "store_true", "default": False, "help": "no wandb"},
+        {"name": "--viz", "action": "store_true", "default": False, "help": "Enable visualization during training"},
 
         {"name": "--record_video", "action": "store_true", "default": False, "help": "record video"},
         

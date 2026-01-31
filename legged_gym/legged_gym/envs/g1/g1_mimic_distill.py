@@ -109,18 +109,27 @@ class G1MimicDistill(HumanoidMimic):
 
     def _reset_ref_motion(self, env_ids, motion_ids=None):
         n = len(env_ids)
+
+        # For CMG, reset the motion library state first
+        if getattr(self, '_use_cmg', False):
+            self._motion_lib.reset(env_ids)
+
         if motion_ids is None:
             motion_ids = self._motion_lib.sample_motions(n, motion_difficulty=self.motion_difficulty)
-        
-        if self._rand_reset:
+
+        if self._rand_reset and not getattr(self, '_use_cmg', False):
             motion_times = self._motion_lib.sample_time(motion_ids)
         else:
             motion_times = torch.zeros(motion_ids.shape, device=self.device, dtype=torch.float)
-        
+
         self._motion_ids[env_ids] = motion_ids
         self._motion_time_offsets[env_ids] = motion_times
-        
-        root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, body_pos = self._motion_lib.calc_motion_frame(motion_ids, motion_times)
+
+        # For CMG, pass env_ids to handle partial reset correctly
+        if getattr(self, '_use_cmg', False):
+            root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, body_pos = self._motion_lib.calc_motion_frame(motion_ids, motion_times, env_ids=env_ids)
+        else:
+            root_pos, root_rot, root_vel, root_ang_vel, dof_pos, dof_vel, body_pos = self._motion_lib.calc_motion_frame(motion_ids, motion_times)
         root_pos[:, 2] += self.cfg.motion.height_offset
 
         self._ref_root_pos[env_ids] = root_pos

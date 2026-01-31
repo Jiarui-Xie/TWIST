@@ -39,19 +39,24 @@ import torch
 import wandb
 
 def train(args):
+    # Default to headless unless --debug or --viz is enabled
     args.headless = True
-    
+
     log_pth = LEGGED_GYM_ROOT_DIR + "/logs/{}/".format(args.proj_name) + args.exptid
     try:
         os.makedirs(log_pth)
     except:
         pass
-    
+
     if args.debug:
         mode = "disabled"
-        args.rows = 10
-        args.cols = 5
-        args.num_envs = 32
+        args.rows = 1
+        args.cols = 1
+        args.num_envs = 1  # Single env for low GPU memory
+        args.headless = False
+    elif getattr(args, 'viz', False):
+        # Visualization mode: enable viewer but keep training
+        mode = "disabled" if args.no_wandb else "online"
         args.headless = False
     else:
         mode = "online"
