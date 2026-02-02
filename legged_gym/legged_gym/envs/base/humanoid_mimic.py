@@ -707,3 +707,51 @@ class HumanoidMimic(HumanoidChar):
         rew_airtime = air_time.sum(dim=1)
         rew_airtime *= torch.norm(self._ref_root_vel[:, :2], dim=1) > 0.05
         return rew_airtime
+
+    # ================== CMG Command Tracking Rewards ==================
+    def _reward_tracking_cmd_vel(self):
+        """
+        Reward for tracking CMG velocity commands (vx, vy in local frame).
+        Only active when using CMG motion generation.
+        """
+        if not getattr(self, '_use_cmg', False):
+            return torch.zeros(self.num_envs, device=self.device)
+
+        # Get CMG commands: [vx, vy, yaw_rate] in local frame
+        cmg_commands = self._motion_lib.get_commands()  # (num_envs, 3)
+        cmd_vx = cmg_commands[:, 0]
+        cmd_vy = cmg_commands[:, 1]
+
+        # Robot's actual velocity in local frame
+        actual_vx = self.base_lin_vel[:, 0]
+        actual_vy = self.base_lin_vel[:, 1]
+
+        # Compute velocity error
+        vx_err = (cmd_vx - actual_vx) ** 2
+        vy_err = (cmd_vy - actual_vy) ** 2
+
+        vel_err = vx_err + vy_err
+        vel_scale = 2.0  # Tunable scale
+
+        return torch.exp(-vel_scale * vel_err)
+
+    def _reward_tracking_cmd_yaw(self):
+        """
+        Reward for tracking CMG yaw rate command.
+        Only active when using CMG motion generation.
+        """
+        if not getattr(self, '_use_cmg', False):
+            return torch.zeros(self.num_envs, device=self.device)
+
+        # Get CMG yaw rate command
+        cmg_commands = self._motion_lib.get_commands()  # (num_envs, 3)
+        cmd_yaw_rate = cmg_commands[:, 2]
+
+        # Robot's actual yaw rate (z component of angular velocity in local frame)
+        actual_yaw_rate = self.base_ang_vel[:, 2]
+
+        # Compute yaw rate error
+        yaw_err = (cmd_yaw_rate - actual_yaw_rate) ** 2
+        yaw_scale = 1.0  # Tunable scale
+
+        return torch.exp(-yaw_scale * yaw_err)

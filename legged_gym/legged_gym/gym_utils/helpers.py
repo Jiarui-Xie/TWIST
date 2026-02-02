@@ -227,6 +227,12 @@ def get_args():
         
         # motion file
         {"name": "--motion_file", "type": str, "help": "motion file", "default": "g1_zhen_phc"},
+
+        # CMG velocity commands for play.py
+        {"name": "--cmd_vx", "type": float, "default": None, "help": "CMG forward velocity command (m/s)"},
+        {"name": "--cmd_vy", "type": float, "default": None, "help": "CMG lateral velocity command (m/s)"},
+        {"name": "--cmd_yaw", "type": float, "default": None, "help": "CMG yaw rate command (rad/s, or deg/s if --cmd_yaw_deg is used)"},
+        {"name": "--cmd_yaw_deg", "action": "store_true", "default": False, "help": "Interpret --cmd_yaw as degrees/s instead of rad/s"},
     ]
     # parse arguments
     args = parse_arguments(

@@ -542,6 +542,31 @@ class G1MimicCMGBaseCfg(G1MimicPrivCfg):
         # Random reset not applicable for CMG
         rand_reset = False
 
+    class rewards(G1MimicPrivCfg.rewards):
+        """CMG-specific rewards including velocity command tracking."""
+        class scales(G1MimicPrivCfg.rewards.scales):
+            # Inherit all existing reward scales
+            tracking_joint_dof = 0.6
+            tracking_joint_vel = 0.2
+            tracking_root_pose = 0.6
+            tracking_root_vel = 1.0
+            tracking_keybody_pos = 2.0
+
+            # CMG velocity command tracking rewards
+            tracking_cmd_vel = 1.5   # Track vx, vy commands
+            tracking_cmd_yaw = 1.0   # Track yaw rate command
+
+            feet_slip = -0.1
+            feet_contact_forces = -5e-4
+            feet_stumble = -1.25
+            dof_pos_limits = -5.0
+            dof_torque_limits = -1.0
+            dof_vel = -1e-4
+            dof_acc = -5e-8
+            action_rate = -0.01
+            feet_air_time = 5.0
+            ang_vel_xy = -0.01
+
 
 class G1MimicCMGSlowCfg(G1MimicCMGBaseCfg):
     """Slow speed training configuration (1 m/s)."""
@@ -572,7 +597,7 @@ class G1MimicCMGMediumCfg(G1MimicCMGBaseCfg):
         # Medium speed: ~2 m/s forward
         cmg_vx_range = [1.5, 2.5]
         cmg_vy_range = [-0.5, 0.5]
-        cmg_yaw_range = [-0.8, 0.8]
+        cmg_yaw_range = [-0.5, 0.5]
 
 
 class G1MimicCMGFastCfg(G1MimicCMGBaseCfg):
@@ -588,7 +613,7 @@ class G1MimicCMGFastCfg(G1MimicCMGBaseCfg):
         # Fast speed: ~3 m/s forward
         cmg_vx_range = [2.5, 3.5]
         cmg_vy_range = [-0.5, 0.5]
-        cmg_yaw_range = [-1.0, 1.0]
+        cmg_yaw_range = [-0.5, 0.5]
 
 
 # PPO configurations for CMG environments

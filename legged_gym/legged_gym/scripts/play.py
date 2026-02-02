@@ -77,15 +77,48 @@ def play(args):
 
     env_cfg.env.record_video = args.record_video
     env_cfg.env.rand_reset = False
-    
+
     if_normalize = env_cfg.env.normalize_obs
     cprint(f"if_normalize: {if_normalize}", "green")
-    
+
     if env_cfg.env.record_video:
         env_cfg.env.episode_length_s = 10
 
     env, _ = task_registry.make_env(name=args.task, args=args, env_cfg=env_cfg)
     obs = env.get_observations()
+
+    # Set CMG velocity commands if specified
+    if hasattr(env, '_use_cmg') and env._use_cmg:
+        cmd_vx = args.cmd_vx
+        cmd_vy = args.cmd_vy
+        cmd_yaw = args.cmd_yaw
+
+        # Convert yaw from degrees to radians if specified
+        if cmd_yaw is not None and args.cmd_yaw_deg:
+            import math
+            cmd_yaw = cmd_yaw * math.pi / 180.0
+
+        if cmd_vx is not None or cmd_vy is not None or cmd_yaw is not None:
+            # Build command tensor
+            commands = env._motion_lib.get_commands()  # Get current commands
+            if cmd_vx is not None:
+                commands[:, 0] = cmd_vx
+            if cmd_vy is not None:
+                commands[:, 1] = cmd_vy
+            if cmd_yaw is not None:
+                commands[:, 2] = cmd_yaw
+
+            # Set commands for all environments
+            env_ids = torch.arange(env.num_envs, device=env.device)
+            env._motion_lib.set_commands(env_ids, commands)
+
+            # Regenerate trajectory with new commands
+            env._motion_lib.reset(env_ids, commands)
+
+            cprint(f"[CMG] Set velocity commands: vx={cmd_vx}, vy={cmd_vy}, yaw={cmd_yaw} rad/s", "cyan")
+        else:
+            cmds = env._motion_lib.get_commands()
+            cprint(f"[CMG] Using random commands: vx={cmds[0,0]:.2f}, vy={cmds[0,1]:.2f}, yaw={cmds[0,2]:.2f} rad/s", "cyan")
 
     # load policy
     train_cfg.runner.resume = True

@@ -36,7 +36,7 @@ echo "Speed Mode: $SPEED_MODE"
 echo "Task: $TASK"
 echo "Experiment ID: $EXPTID"
 echo "Device: $DEVICE"
-echo "Num Envs: 1024"
+echo "Num Envs: 2048"
 echo "Visualization: Enabled"
 echo "=========================================="
 
@@ -46,10 +46,8 @@ python train.py \
     --task $TASK \
     --exptid $EXPTID \
     --device $DEVICE \
-    --num_envs 1024 \
-    --rows 32 \
-    --cols 32 \
-    --no_wandb \
-    --viz
+    --num_envs 2048 \
+    --max_iterations 6001 \
+    --headless \
 
 echo "Training complete!"
