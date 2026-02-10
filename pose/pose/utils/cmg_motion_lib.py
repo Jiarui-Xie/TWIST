@@ -32,6 +32,33 @@ CMG_TO_G1_INDICES = [
     22, 23, 24, 25,         # Right arm (4) - skip left wrist 19-21
 ]
 
+# Mirror indices: swap left and right for 23 DOF
+# Used to prevent left-right bias in CMG training
+DOF_MIRROR_INDICES_23 = [
+    6, 7, 8, 9, 10, 11,     # right leg -> left leg position
+    0, 1, 2, 3, 4, 5,       # left leg -> right leg position
+    12, 13, 14,              # waist stays
+    19, 20, 21, 22,          # right arm -> left arm position
+    15, 16, 17, 18,          # left arm -> right arm position
+]
+
+# Sign flips: roll and yaw joints flip sign when mirrored
+# Joint order per group: pitch, roll, yaw, knee, ankle_pitch, ankle_roll (legs)
+#                        shoulder_pitch, shoulder_roll, shoulder_yaw, elbow (arms)
+#                        yaw, roll, pitch (waist)
+DOF_MIRROR_SIGNS_23 = [
+    1.0, -1.0, -1.0, 1.0, 1.0, -1.0,   # left leg (from right)
+    1.0, -1.0, -1.0, 1.0, 1.0, -1.0,   # right leg (from left)
+    -1.0, -1.0, 1.0,                     # waist: yaw, roll, pitch
+    1.0, -1.0, -1.0, 1.0,               # left arm (from right)
+    1.0, -1.0, -1.0, 1.0,               # right arm (from left)
+]
+
+# Key body mirror: swap left and right
+# Order: [left_hand, right_hand, left_ankle, right_ankle, left_knee, right_knee,
+#          left_elbow, right_elbow, head]
+KEYBODY_MIRROR_INDICES = [1, 0, 3, 2, 5, 4, 7, 6, 8]
+
 
 class CMGMotionLib:
     """
@@ -187,6 +214,12 @@ class CMGMotionLib:
 
         # Motion IDs (used for interface compatibility, maps to command sets)
         self._motion_ids = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
+
+        # Mirror flags for left-right symmetry training
+        self._mirror_flags = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
+        self._dof_mirror_indices = torch.tensor(DOF_MIRROR_INDICES_23, device=self._device, dtype=torch.long)
+        self._dof_mirror_signs = torch.tensor(DOF_MIRROR_SIGNS_23, device=self._device, dtype=torch.float)
+        self._keybody_mirror_indices = torch.tensor(KEYBODY_MIRROR_INDICES, device=self._device, dtype=torch.long)
 
     def _sample_commands(self, n: int) -> torch.Tensor:
         """Sample random velocity commands within configured ranges."""
@@ -415,6 +448,10 @@ class CMGMotionLib:
         # Reset buffer frame index
         self._buffer_frame_idx[env_ids] = 0
 
+        # Randomly mirror 50% of environments for symmetry training
+        mirror_mask = torch.rand(n, device=self._device) < 0.5
+        self._mirror_flags[env_ids] = mirror_mask
+
         # Generate trajectory for reset envs
         self._generate_trajectory(env_ids)
 
@@ -547,6 +584,11 @@ class CMGMotionLib:
             # Convert quaternion from wxyz (CMG internal) to xyzw (Isaac Gym convention)
             root_rot_xyzw = torch.cat([root_rot[:, 1:], root_rot[:, :1]], dim=-1)
 
+            # Apply left-right mirror for flagged environments
+            root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos = \
+                self._apply_mirror(env_indices, root_pos, root_rot_xyzw, root_vel, root_ang_vel,
+                                   dof_pos, dof_vel, local_key_body_pos)
+
             return root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos
 
     def _calc_current_frame(
@@ -588,6 +630,12 @@ class CMGMotionLib:
 
         # Convert quaternion from wxyz (CMG internal) to xyzw (Isaac Gym convention)
         root_rot_xyzw = torch.cat([root_rot[:, 1:], root_rot[:, :1]], dim=-1)
+
+        # Apply left-right mirror for flagged environments
+        env_indices = torch.arange(self._num_envs, device=self._device)
+        root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos = \
+            self._apply_mirror(env_indices, root_pos, root_rot_xyzw, root_vel, root_ang_vel,
+                               dof_pos, dof_vel, local_key_body_pos)
 
         return root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos
 
@@ -631,6 +679,60 @@ class CMGMotionLib:
         # Convert quaternion from wxyz (CMG internal) to xyzw (Isaac Gym convention)
         root_rot_xyzw = torch.cat([root_rot[:, 1:], root_rot[:, :1]], dim=-1)
 
+        # Apply left-right mirror for flagged environments
+        root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos = \
+            self._apply_mirror(env_ids, root_pos, root_rot_xyzw, root_vel, root_ang_vel,
+                               dof_pos, dof_vel, local_key_body_pos)
+
+        return root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos
+
+    def _apply_mirror(self, env_indices, root_pos, root_rot_xyzw, root_vel, root_ang_vel,
+                       dof_pos, dof_vel, local_key_body_pos):
+        """Apply left-right mirror transformation for flagged environments.
+
+        Mirrors DOFs (swap L/R, flip roll/yaw signs), key body positions (swap L/R, flip y),
+        root rotation (negate roll/yaw), root velocity (flip vy), root angular velocity (flip yaw).
+
+        Args:
+            env_indices: Environment index for each batch element (used to look up mirror flags)
+            Others: Motion frame outputs to mirror in-place for flagged envs
+        Returns:
+            Tuple of mirrored outputs
+        """
+        mirror = self._mirror_flags[env_indices]
+        if not mirror.any():
+            return root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos
+
+        # Mirror DOFs: swap left/right, flip roll/yaw signs
+        dof_pos = dof_pos.clone()
+        dof_vel = dof_vel.clone()
+        dof_pos[mirror] = dof_pos[mirror][:, self._dof_mirror_indices] * self._dof_mirror_signs
+        dof_vel[mirror] = dof_vel[mirror][:, self._dof_mirror_indices] * self._dof_mirror_signs
+
+        # Mirror root position: flip y
+        root_pos = root_pos.clone()
+        root_pos[mirror, 1] *= -1
+
+        # Mirror root rotation: negate x and z components (xyzw format)
+        # This negates roll and yaw while preserving pitch
+        root_rot_xyzw = root_rot_xyzw.clone()
+        root_rot_xyzw[mirror, 0] *= -1  # x (roll)
+        root_rot_xyzw[mirror, 2] *= -1  # z (yaw)
+
+        # Mirror root velocity: flip vy
+        root_vel = root_vel.clone()
+        root_vel[mirror, 1] *= -1
+
+        # Mirror root angular velocity: flip roll rate and yaw rate
+        root_ang_vel = root_ang_vel.clone()
+        root_ang_vel[mirror, 0] *= -1  # roll rate
+        root_ang_vel[mirror, 2] *= -1  # yaw rate
+
+        # Mirror key body positions: swap left/right, flip y
+        local_key_body_pos = local_key_body_pos.clone()
+        local_key_body_pos[mirror] = local_key_body_pos[mirror][:, self._keybody_mirror_indices, :]
+        local_key_body_pos[mirror, :, 1] *= -1
+
         return root_pos, root_rot_xyzw, root_vel, root_ang_vel, dof_pos, dof_vel, local_key_body_pos
 
     def get_key_body_idx(self, key_body_names: List[str]) -> List[int]:
@@ -649,8 +751,14 @@ class CMGMotionLib:
         return [f"cmg_vx{self._vx_range}_vy{self._vy_range}_yaw{self._yaw_range}"]
 
     def get_commands(self) -> torch.Tensor:
-        """Get current velocity commands for all environments."""
-        return self._commands.clone()
+        """Get current velocity commands for all environments.
+        Returns mirrored commands (vy, yaw negated) for mirrored environments."""
+        commands = self._commands.clone()
+        mirror = self._mirror_flags
+        if mirror.any():
+            commands[mirror, 1] *= -1  # flip vy
+            commands[mirror, 2] *= -1  # flip yaw_rate
+        return commands
 
     def set_commands(self, env_ids: torch.Tensor, commands: torch.Tensor):
         """Set velocity commands for specified environments."""

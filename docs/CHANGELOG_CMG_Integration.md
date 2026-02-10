@@ -323,6 +323,63 @@ root_rot_xyzw = torch.cat([root_rot[:, 1:], root_rot[:, :1]], dim=-1)
 
 ---
 
+## 2026-02-10 CMG 训练奖励重构：镜像对称 + 上下半身分离
+
+### 改动目标
+
+1. 防止 CMG 命令偏向一侧导致训练出的策略左右不对称
+2. 鼓励动作的左右对称性
+3. 弱化全局速度跟踪，让机器人更自然
+4. 弱化上半身跟踪，鼓励上半身自由平衡
+
+### 修改文件
+
+#### 1. `pose/pose/utils/cmg_motion_lib.py`
+
+**新增 CMG 输出左右镜像**:
+- 新增 `DOF_MIRROR_INDICES_23`、`DOF_MIRROR_SIGNS_23`、`KEYBODY_MIRROR_INDICES` 常量
+- `_init_buffers()`: 初始化 `_mirror_flags` 和镜像索引张量
+- `reset()`: 随机设置 **50%** 的环境为镜像模式
+- 新增 `_apply_mirror()` 方法，在 `calc_motion_frame` 输出端对标记环境做镜像变换：
+  - DOF pos/vel：交换左右肢体索引 + 翻转 roll/yaw 关节符号
+  - Key body 位置：交换左右体索引 + 翻转 y 坐标
+  - Root 位置：翻转 y
+  - Root 旋转：翻转 roll 和 yaw（xyzw 格式取反 x、z 分量）
+  - Root 线速度：翻转 vy
+  - Root 角速度：翻转 roll rate 和 yaw rate
+- 在 `_calc_current_frame`、`_calc_partial_frame`、tiled case 三个输出路径均调用 `_apply_mirror`
+- `get_commands()`: 对镜像环境返回翻转后的 vy 和 yaw_rate
+
+#### 2. `legged_gym/legged_gym/envs/base/humanoid_mimic.py`
+
+**新增奖励函数**:
+- `_reward_action_symmetry()`: 比较左右肢体动作的对称性，使用 `exp(-0.5 * err)` 形式
+- `_reward_tracking_keybody_pos_upper()`: 上半身关键体弱跟踪（手、肘、头），exp 内 scale=5.0（比下半身的 10.0 更软）
+
+**修改奖励函数**:
+- `_reward_tracking_keybody_pos()`: CMG 模式下仅跟踪**下半身**（踝关节、膝关节），非 CMG 模式不变
+
+#### 3. `legged_gym/legged_gym/envs/g1/g1_mimic_distill_config.py`
+
+**`G1MimicCMGBaseCfg` 修改**:
+
+| 参数 | 原值 | 新值 | 说明 |
+|------|------|------|------|
+| `tracking_root_pose` | 0.6 | **0.2** | 弱化全局姿态跟踪 |
+| `tracking_root_vel` | 1.0 | **0.8** | 弱化全局速度跟踪 |
+| `tracking_keybody_pos` | 2.0 | 2.0 | 不变，但仅跟踪下半身 |
+| `tracking_keybody_pos_upper` | — | **0.3** | 新增：弱上半身跟踪 |
+| `action_symmetry` | — | **0.1** | 新增：对称弱奖励 |
+| 手臂 `dof_err_w` | 0.8/1.0 | **0.3/0.4** | 弱化手臂 DOF 跟踪权重 |
+
+### 设计思路
+
+**镜像方案**: 不修改 CMG 输入或轨迹缓冲区内容，仅在 `calc_motion_frame` 输出端做镜像变换。这样 CMG 用原始命令正常生成动作，下游所有代码（observation、reward）读到的都是一致的镜像数据。50% 环境看到原始动作，50% 看到镜像动作，策略学到对称行为。
+
+**上半身分离**: 将 `tracking_keybody_pos` 拆分为上下半身两个独立奖励。下半身（踝、膝）保持强跟踪（scale=2.0, exp_scale=10.0），上半身（手、肘、头）弱跟踪（scale=0.3, exp_scale=5.0）。同时降低手臂 DOF 的 `dof_err_w` 权重。
+
+---
+
 ## 待验证
 
 - [x] CMGMotionLib 加载和运行
@@ -330,6 +387,9 @@ root_rot_xyzw = torch.cat([root_rot[:, 1:], root_rot[:, :1]], dim=-1)
 - [x] 简化 FK 实现
 - [x] 四元数格式修复 (wxyz -> xyzw)
 - [x] 部分环境重置修复
+- [x] CMG 输出左右镜像
+- [x] 上下半身跟踪分离
+- [x] 动作对称奖励
 - [ ] 三档速度训练效果
 - [ ] 轨迹缓冲区重生成逻辑
 - [ ] mean reward 非零验证

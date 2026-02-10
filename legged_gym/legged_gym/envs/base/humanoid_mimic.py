@@ -572,25 +572,31 @@ class HumanoidMimic(HumanoidChar):
         return root_ang_vel_err
     
     def _reward_tracking_keybody_pos(self):
-        key_body_pos = self.rigid_body_states[:, self._key_body_ids, 0:3] # (num_envs, num_key_bodies, 3)
+        # When tracking_keybody_pos_upper is also active, this reward focuses on lower body only
+        # Lower body key body indices within key_bodies list: 2,3 (ankles), 4,5 (knees)
+        if hasattr(self, '_use_cmg') and self._use_cmg:
+            lower_local_indices = [2, 3, 4, 5]
+            body_ids = self._key_body_ids[lower_local_indices]
+        else:
+            body_ids = self._key_body_ids
+
+        key_body_pos = self.rigid_body_states[:, body_ids, 0:3] # (num_envs, num_key_bodies, 3)
         key_body_pos = key_body_pos - self.root_states[:, 0:3].unsqueeze(1)
         if not self.global_obs:
             base_yaw_quat = quat_from_euler_xyz(0*self.yaw, 0*self.yaw, self.yaw)
-            # key_body_pos = convert_to_local_root_body_pos(self.root_states[:, 3:7], key_body_pos)
             key_body_pos = convert_to_local_root_body_pos(base_yaw_quat, key_body_pos)
-        tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids, :]
+        tar_key_body_pos = self._ref_body_pos[:, body_ids, :]
         tar_key_body_pos = tar_key_body_pos - self._ref_root_pos.unsqueeze(1)
         if not self.global_obs:
             _, _, ref_yaw = euler_from_quaternion(self._ref_root_rot)
             ref_yaw_quat = quat_from_euler_xyz(0*ref_yaw, 0*ref_yaw, ref_yaw)
-            # tar_key_body_pos = convert_to_local_root_body_pos(self._ref_root_rot, tar_key_body_pos)
             tar_key_body_pos = convert_to_local_root_body_pos(ref_yaw_quat, tar_key_body_pos)
         key_body_pos_diff = key_body_pos - tar_key_body_pos
         key_body_pos_err = torch.sum(key_body_pos_diff * key_body_pos_diff, dim=-1)
         key_body_pos_err = torch.sum(key_body_pos_err, dim=-1)
-        
+
         key_body_pos_scale = 10.0
-        
+
         return torch.exp(-key_body_pos_scale * key_body_pos_err)
     
     def _error_tracking_keybody_pos(self):
@@ -707,6 +713,56 @@ class HumanoidMimic(HumanoidChar):
         rew_airtime = air_time.sum(dim=1)
         rew_airtime *= torch.norm(self._ref_root_vel[:, :2], dim=1) > 0.05
         return rew_airtime
+
+    def _reward_action_symmetry(self):
+        """
+        Weak reward encouraging left-right symmetric actions.
+        Compares left limb actions with mirrored right limb actions.
+        During walking this won't be perfect (anti-phase), but discourages persistent asymmetric bias.
+        """
+        # Left indices: 0-5 (leg), 15-18 (arm)
+        # Right indices: 6-11 (leg), 19-22 (arm)
+        left_indices = [0, 1, 2, 3, 4, 5, 15, 16, 17, 18]
+        right_indices = [6, 7, 8, 9, 10, 11, 19, 20, 21, 22]
+        # Signs: pitch(+), roll(-), yaw(-), knee(+), ankle_p(+), ankle_r(-), s_pitch(+), s_roll(-), s_yaw(-), elbow(+)
+        mirror_signs = torch.tensor([1, -1, -1, 1, 1, -1, 1, -1, -1, 1],
+                                     device=self.device, dtype=torch.float)
+
+        left_actions = self.actions[:, left_indices]
+        right_actions = self.actions[:, right_indices]
+
+        # Compare left actions with mirrored right actions
+        diff = left_actions - right_actions * mirror_signs
+        err = torch.mean(diff * diff, dim=-1)
+        return torch.exp(-0.5 * err)
+
+    def _reward_tracking_keybody_pos_upper(self):
+        """
+        Weak tracking reward for upper body key bodies only (hands, elbows, head).
+        Encourages using upper body for balance rather than rigid tracking.
+        """
+        # Upper body key body indices within key_bodies list: 0,1 (hands), 6,7 (elbows), 8 (head)
+        upper_local_indices = [0, 1, 6, 7, 8]
+
+        key_body_pos = self.rigid_body_states[:, self._key_body_ids[upper_local_indices], 0:3]
+        key_body_pos = key_body_pos - self.root_states[:, 0:3].unsqueeze(1)
+        if not self.global_obs:
+            base_yaw_quat = quat_from_euler_xyz(0*self.yaw, 0*self.yaw, self.yaw)
+            key_body_pos = convert_to_local_root_body_pos(base_yaw_quat, key_body_pos)
+
+        tar_key_body_pos = self._ref_body_pos[:, self._key_body_ids[upper_local_indices], :]
+        tar_key_body_pos = tar_key_body_pos - self._ref_root_pos.unsqueeze(1)
+        if not self.global_obs:
+            _, _, ref_yaw = euler_from_quaternion(self._ref_root_rot)
+            ref_yaw_quat = quat_from_euler_xyz(0*ref_yaw, 0*ref_yaw, ref_yaw)
+            tar_key_body_pos = convert_to_local_root_body_pos(ref_yaw_quat, tar_key_body_pos)
+
+        key_body_pos_diff = key_body_pos - tar_key_body_pos
+        key_body_pos_err = torch.sum(key_body_pos_diff * key_body_pos_diff, dim=-1)
+        key_body_pos_err = torch.sum(key_body_pos_err, dim=-1)
+
+        key_body_pos_scale = 5.0  # softer scale than lower body (10.0)
+        return torch.exp(-key_body_pos_scale * key_body_pos_err)
 
     # ================== CMG Command Tracking Rewards ==================
     def _reward_tracking_cmd_vel(self):

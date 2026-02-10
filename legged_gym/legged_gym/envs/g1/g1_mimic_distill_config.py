@@ -542,19 +542,32 @@ class G1MimicCMGBaseCfg(G1MimicPrivCfg):
         # Random reset not applicable for CMG
         rand_reset = False
 
+        # Weakened upper body DOF tracking weights for CMG
+        # Encourages upper body to balance freely instead of rigid tracking
+        dof_err_w = [1.0, 0.8, 0.8, 1.0, 0.5, 0.5, # Left Leg (unchanged)
+                     1.0, 0.8, 0.8, 1.0, 0.5, 0.5, # Right Leg (unchanged)
+                     0.6, 0.6, 0.6,                   # Waist (unchanged)
+                     0.3, 0.3, 0.3, 0.4,             # Left Arm (reduced from 0.8,0.8,0.8,1.0)
+                     0.3, 0.3, 0.3, 0.4,             # Right Arm (reduced from 0.8,0.8,0.8,1.0)
+                     ]
+
     class rewards(G1MimicPrivCfg.rewards):
         """CMG-specific rewards including velocity command tracking."""
         class scales(G1MimicPrivCfg.rewards.scales):
             # Inherit all existing reward scales
             tracking_joint_dof = 0.6
             tracking_joint_vel = 0.2
-            tracking_root_pose = 0.6
-            tracking_root_vel = 1.0
-            tracking_keybody_pos = 2.0
+            tracking_root_pose = 0.2
+            tracking_root_vel = 0.8
+            tracking_keybody_pos = 2.0  # Now only tracks lower body (ankles, knees)
+            tracking_keybody_pos_upper = 0.3  # Weak upper body tracking (hands, elbows, head)
 
             # CMG velocity command tracking rewards
             tracking_cmd_vel = 1.5   # Track vx, vy commands
             tracking_cmd_yaw = 1.0   # Track yaw rate command
+
+            # Action symmetry: weak reward encouraging left-right symmetric actions
+            action_symmetry = 0.1
 
             feet_slip = -0.1
             feet_contact_forces = -5e-4

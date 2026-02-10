@@ -3,6 +3,28 @@
 [[Arxiv]](https://arxiv.org/abs/2505.02833)
 [[Video]](https://www.youtube.com/watch?v=QgA7jNoiIZo)
 
+> **Changelog**: 所有 CMG 相关改动记录见 [`docs/CHANGELOG_CMG_Integration.md`](docs/CHANGELOG_CMG_Integration.md)
+
+## Quick Reference
+
+```bash
+conda activate twist
+
+# Mocap teacher training
+bash train_teacher.sh <exptid> <cuda_device>
+
+# CMG teacher training (neural motion generator, no mocap needed)
+bash train_teacher_cmg.sh <slow|medium|fast> <exptid> <cuda_device>
+
+# CMG training with visualization (fewer envs, shorter run)
+bash train_teacher_cmg_viz.sh <slow|medium|fast> <exptid> <cuda_device>
+
+# Student distillation (DAgger: RL+BC from teacher)
+bash train_student.sh <student_id> <teacher_id> <cuda_device>
+
+# Export & deploy
+bash to_jit.sh <student_exptid>
+```
 
 ![Banner for TWIST](./assets/TWIST.png)
 
