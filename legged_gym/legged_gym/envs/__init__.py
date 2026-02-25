@@ -43,6 +43,10 @@ from .g1.g1_mimic_distill_config import (
     G1MimicCMGSlowCfg, G1MimicCMGSlowCfgPPO,
     G1MimicCMGMediumCfg, G1MimicCMGMediumCfgPPO,
     G1MimicCMGFastCfg, G1MimicCMGFastCfgPPO,
+    G1MimicCMGSlowVTCfg, G1MimicCMGSlowVTCfgPPO,
+    G1MimicCMGMediumVTCfg, G1MimicCMGMediumVTCfgPPO,
+    G1MimicCMGFastVTCfg, G1MimicCMGFastVTCfgPPO,
+    G1MimicCMGStuRLCfg, G1MimicCMGStuRLCfgDAgger,
 )
 
 from legged_gym.gym_utils.task_registry import task_registry
@@ -53,8 +57,16 @@ task_registry.register("g1_priv_mimic", G1MimicDistill, G1MimicPrivCfg(), G1Mimi
 
 task_registry.register("g1_stu_rl", G1MimicDistill, G1MimicStuRLCfg(), G1MimicStuRLCfgDAgger())
 
-# CMG-based environments (three speed tiers)
+# CMG-based environments (three speed tiers, teacher)
 task_registry.register("g1_cmg_slow", G1MimicDistill, G1MimicCMGSlowCfg(), G1MimicCMGSlowCfgPPO())
 task_registry.register("g1_cmg_medium", G1MimicDistill, G1MimicCMGMediumCfg(), G1MimicCMGMediumCfgPPO())
 task_registry.register("g1_cmg_fast", G1MimicDistill, G1MimicCMGFastCfg(), G1MimicCMGFastCfgPPO())
+
+# CMG velocity-tracking dominant environments (fine-tune from walking checkpoints)
+task_registry.register("g1_cmg_slow_vt", G1MimicDistill, G1MimicCMGSlowVTCfg(), G1MimicCMGSlowVTCfgPPO())
+task_registry.register("g1_cmg_medium_vt", G1MimicDistill, G1MimicCMGMediumVTCfg(), G1MimicCMGMediumVTCfgPPO())
+task_registry.register("g1_cmg_fast_vt", G1MimicDistill, G1MimicCMGFastVTCfg(), G1MimicCMGFastVTCfgPPO())
+
+# CMG student (DAgger distillation from CMG teacher)
+task_registry.register("g1_cmg_stu_rl", G1MimicDistill, G1MimicCMGStuRLCfg(), G1MimicCMGStuRLCfgDAgger())
 

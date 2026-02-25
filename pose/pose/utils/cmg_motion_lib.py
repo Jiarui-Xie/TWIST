@@ -133,6 +133,9 @@ class CMGMotionLib:
         # Initialize motion state buffers
         self._init_buffers()
 
+        # Build velocity estimator from training data
+        self._build_velocity_estimator()
+
         print(f"[CMGMotionLib] Initialized with {num_envs} envs, "
               f"vx=[{vx_range[0]:.1f}, {vx_range[1]:.1f}], "
               f"vy=[{vy_range[0]:.1f}, {vy_range[1]:.1f}], "
@@ -215,11 +218,88 @@ class CMGMotionLib:
         # Motion IDs (used for interface compatibility, maps to command sets)
         self._motion_ids = torch.zeros(self._num_envs, dtype=torch.long, device=self._device)
 
+        # Estimated actual velocities (from velocity calibration layer)
+        # These replace self._commands for root state integration and RL reward targets
+        self._actual_commands = torch.zeros(self._num_envs, 3, device=self._device)
+
         # Mirror flags for left-right symmetry training
         self._mirror_flags = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
         self._dof_mirror_indices = torch.tensor(DOF_MIRROR_INDICES_23, device=self._device, dtype=torch.long)
         self._dof_mirror_signs = torch.tensor(DOF_MIRROR_SIGNS_23, device=self._device, dtype=torch.float)
         self._keybody_mirror_indices = torch.tensor(KEYBODY_MIRROR_INDICES, device=self._device, dtype=torch.long)
+
+    def _build_velocity_estimator(self):
+        """Build a linear regression from 29 DOF velocities to [vx, vy, yaw].
+
+        Uses CMG training data where commands correspond to actual root velocities
+        from simulation. Fits least-squares: vel_cmd = dof_vel @ W + b
+        """
+        # Collect all (dof_vel, command) pairs from training samples
+        all_dof_vels = []
+        all_commands = []
+
+        for sample in self._init_samples:
+            motion = sample["motion"]  # (seq_len+1, 58)
+            command = sample["command"]  # (seq_len, 3)
+            seq_len = command.shape[0]
+
+            # Extract DOF velocities (dims 29-57) for frames that have commands
+            dof_vel = motion[:seq_len, 29:]  # (seq_len, 29)
+            all_dof_vels.append(dof_vel)
+            all_commands.append(command)
+
+        # Stack into matrices
+        X = np.concatenate(all_dof_vels, axis=0)  # (N, 29)
+        Y = np.concatenate(all_commands, axis=0)   # (N, 3)
+
+        # Add bias column
+        X_bias = np.concatenate([X, np.ones((X.shape[0], 1))], axis=1)  # (N, 30)
+
+        # Least-squares solve: X_bias @ [W; b] = Y
+        # Using numpy lstsq for numerical stability
+        result, residuals, rank, sv = np.linalg.lstsq(X_bias, Y, rcond=None)
+
+        W = result[:29, :]  # (29, 3)
+        b = result[29, :]   # (3,)
+
+        # Store as torch tensors
+        self._vel_est_W = torch.from_numpy(W).float().to(self._device)
+        self._vel_est_b = torch.from_numpy(b).float().to(self._device)
+
+        # Compute and print RMSE for diagnostics
+        Y_pred = X @ W + b
+        rmse = np.sqrt(np.mean((Y_pred - Y) ** 2, axis=0))
+        print(f"[CMGMotionLib] Velocity estimator built from {X.shape[0]} frames")
+        print(f"[CMGMotionLib] RMSE: vx={rmse[0]:.4f} m/s, vy={rmse[1]:.4f} m/s, yaw={rmse[2]:.4f} rad/s")
+
+    @torch.no_grad()
+    def _estimate_actual_velocity(self, env_ids: torch.Tensor) -> torch.Tensor:
+        """Estimate actual gait velocity from trajectory buffer DOF velocities.
+
+        Applies linear regression per-frame, averages over frames 20-100 (skip warmup).
+
+        Args:
+            env_ids: Environment indices to estimate for
+
+        Returns:
+            Estimated [vx, vy, yaw] per env, shape (len(env_ids), 3)
+        """
+        # Get trajectory buffer for these envs
+        traj = self._trajectory_buffer[env_ids]  # (n, 100, 58) normalized
+
+        # Denormalize to get raw motion
+        traj_raw = traj * self._motion_std + self._motion_mean  # (n, 100, 58)
+
+        # Extract DOF velocities (dims 29-57)
+        dof_vel = traj_raw[:, :, 29:]  # (n, 100, 29)
+
+        # Apply linear regression: vel = dof_vel @ W + b
+        vel_est = torch.matmul(dof_vel, self._vel_est_W) + self._vel_est_b  # (n, 100, 3)
+
+        # Average over frames 20-100 (skip warmup)
+        vel_avg = vel_est[:, 20:, :].mean(dim=1)  # (n, 3)
+
+        return vel_avg
 
     def _sample_commands(self, n: int) -> torch.Tensor:
         """Sample random velocity commands within configured ranges."""
@@ -265,10 +345,10 @@ class CMGMotionLib:
 
     def _compute_root_state_at_time(self, env_idx: int, time_offset: float) -> Tuple[torch.Tensor, torch.Tensor]:
         """Compute root position and rotation at a given time offset from current."""
-        # Get command for this env
-        vx_local = self._commands[env_idx, 0]
-        vy_local = self._commands[env_idx, 1]
-        yaw_rate = self._commands[env_idx, 2]
+        # Use actual estimated velocities for root state computation
+        vx_local = self._actual_commands[env_idx, 0]
+        vy_local = self._actual_commands[env_idx, 1]
+        yaw_rate = self._actual_commands[env_idx, 2]
 
         # Current state
         base_yaw = self._root_yaw[env_idx]
@@ -315,51 +395,48 @@ class CMGMotionLib:
         root_pos = self._root_pos[env_ids].clone()  # (n, 3)
         root_yaw = self._root_yaw[env_ids].clone()  # (n,)
 
-        # Extract velocity components
-        vx_local = commands[:, 0]  # (n,)
-        vy_local = commands[:, 1]  # (n,)
-        yaw_rate = commands[:, 2]  # (n,)
-
-        # Generate trajectory - vectorized over environments
+        # Generate trajectory - only motion states (root buffers computed after velocity estimation)
         for frame in range(self.TRAJECTORY_BUFFER_FRAMES):
-            # Store current state
             self._trajectory_buffer[env_ids, frame] = current_norm
-
-            # Compute root state for this frame (vectorized)
-            time_offset = frame * self._dt
-
-            # Compute yaw angles
-            avg_yaw = root_yaw + yaw_rate * time_offset * 0.5  # (n,)
-            new_yaw = root_yaw + yaw_rate * time_offset  # (n,)
-
-            cos_yaw = torch.cos(avg_yaw)  # (n,)
-            sin_yaw = torch.sin(avg_yaw)  # (n,)
-
-            # Update root position buffer (vectorized)
-            self._root_pos_buffer[env_ids, frame, 0] = root_pos[:, 0] + (vx_local * cos_yaw - vy_local * sin_yaw) * time_offset
-            self._root_pos_buffer[env_ids, frame, 1] = root_pos[:, 1] + (vx_local * sin_yaw + vy_local * cos_yaw) * time_offset
-            self._root_pos_buffer[env_ids, frame, 2] = self._root_height
-
-            # Update root rotation buffer (vectorized)
-            half_yaw = new_yaw * 0.5  # (n,)
-            self._root_rot_buffer[env_ids, frame, 0] = torch.cos(half_yaw)
-            self._root_rot_buffer[env_ids, frame, 1] = 0.0
-            self._root_rot_buffer[env_ids, frame, 2] = 0.0
-            self._root_rot_buffer[env_ids, frame, 3] = torch.sin(half_yaw)
-
-            # CMG forward pass for next state
             next_motion_norm = self._cmg_model(current_norm, commands_norm)
             current_norm = next_motion_norm
 
         # Reset buffer frame index
         self._buffer_frame_idx[env_ids] = 0
 
+        # Estimate actual velocity from generated trajectory
+        self._actual_commands[env_ids] = self._estimate_actual_velocity(env_ids)
+
+        # Recompute root position/rotation buffers using actual velocities
+        actual_vx = self._actual_commands[env_ids, 0]  # (n,)
+        actual_vy = self._actual_commands[env_ids, 1]  # (n,)
+        actual_yaw_rate = self._actual_commands[env_ids, 2]  # (n,)
+
+        for frame in range(self.TRAJECTORY_BUFFER_FRAMES):
+            time_offset = frame * self._dt
+
+            avg_yaw = root_yaw + actual_yaw_rate * time_offset * 0.5
+            new_yaw = root_yaw + actual_yaw_rate * time_offset
+
+            cos_yaw_f = torch.cos(avg_yaw)
+            sin_yaw_f = torch.sin(avg_yaw)
+
+            self._root_pos_buffer[env_ids, frame, 0] = root_pos[:, 0] + (actual_vx * cos_yaw_f - actual_vy * sin_yaw_f) * time_offset
+            self._root_pos_buffer[env_ids, frame, 1] = root_pos[:, 1] + (actual_vx * sin_yaw_f + actual_vy * cos_yaw_f) * time_offset
+            self._root_pos_buffer[env_ids, frame, 2] = self._root_height
+
+            half_yaw = new_yaw * 0.5
+            self._root_rot_buffer[env_ids, frame, 0] = torch.cos(half_yaw)
+            self._root_rot_buffer[env_ids, frame, 1] = 0.0
+            self._root_rot_buffer[env_ids, frame, 2] = 0.0
+            self._root_rot_buffer[env_ids, frame, 3] = torch.sin(half_yaw)
+
     def _update_root_state(self, dt: float):
-        """Update root position and orientation based on velocity commands."""
-        # Get local velocities
-        vx_local = self._commands[:, 0]
-        vy_local = self._commands[:, 1]
-        yaw_rate = self._commands[:, 2]
+        """Update root position and orientation based on estimated actual velocities."""
+        # Use actual estimated velocities (consistent with gait) instead of raw commands
+        vx_local = self._actual_commands[:, 0]
+        vy_local = self._actual_commands[:, 1]
+        yaw_rate = self._actual_commands[:, 2]
 
         # Convert local velocity to world frame
         cos_yaw = torch.cos(self._root_yaw)
@@ -434,6 +511,9 @@ class CMGMotionLib:
             self._commands[env_ids] = self._sample_commands(n)
         else:
             self._commands[env_ids] = commands
+
+        # Initialize actual commands to sampled commands (updated after trajectory generation)
+        self._actual_commands[env_ids] = self._commands[env_ids].clone()
 
         # Get initial motion states
         init_motion = self._get_init_motion(n)
@@ -561,8 +641,8 @@ class CMGMotionLib:
             root_pos = self._root_pos_buffer[env_indices, target_frames]  # (batch_size, 3)
             root_rot = self._root_rot_buffer[env_indices, target_frames]  # (batch_size, 4)
 
-            # Get commands for each batch element
-            commands = self._commands[env_indices]  # (batch_size, 3)
+            # Get actual estimated commands for each batch element
+            commands = self._actual_commands[env_indices]  # (batch_size, 3)
             vx_local = commands[:, 0]
             vy_local = commands[:, 1]
             yaw_rate = commands[:, 2]
@@ -610,12 +690,12 @@ class CMGMotionLib:
         root_pos = self._root_pos_buffer[batch_indices, frame_indices]
         root_rot = self._root_rot_buffer[batch_indices, frame_indices]
 
-        # Compute root velocities from commands (in world frame)
+        # Compute root velocities from actual estimated velocities (in world frame)
         cos_yaw = torch.cos(self._root_yaw)
         sin_yaw = torch.sin(self._root_yaw)
 
-        vx_local = self._commands[:, 0]
-        vy_local = self._commands[:, 1]
+        vx_local = self._actual_commands[:, 0]
+        vy_local = self._actual_commands[:, 1]
 
         root_vel = torch.zeros(self._num_envs, 3, device=self._device)
         root_vel[:, 0] = vx_local * cos_yaw - vy_local * sin_yaw
@@ -623,7 +703,7 @@ class CMGMotionLib:
         root_vel[:, 2] = 0.0
 
         root_ang_vel = torch.zeros(self._num_envs, 3, device=self._device)
-        root_ang_vel[:, 2] = self._commands[:, 2]  # yaw rate
+        root_ang_vel[:, 2] = self._actual_commands[:, 2]  # yaw rate
 
         # Compute key body positions using forward kinematics
         local_key_body_pos = self._fk.compute_body_positions(root_pos, root_rot, dof_pos)
@@ -658,12 +738,12 @@ class CMGMotionLib:
         root_pos = self._root_pos_buffer[env_ids, frame_indices]
         root_rot = self._root_rot_buffer[env_ids, frame_indices]
 
-        # Compute root velocities from commands
+        # Compute root velocities from actual estimated velocities
         cos_yaw = torch.cos(self._root_yaw[env_ids])
         sin_yaw = torch.sin(self._root_yaw[env_ids])
 
-        vx_local = self._commands[env_ids, 0]
-        vy_local = self._commands[env_ids, 1]
+        vx_local = self._actual_commands[env_ids, 0]
+        vy_local = self._actual_commands[env_ids, 1]
 
         root_vel = torch.zeros(n, 3, device=self._device)
         root_vel[:, 0] = vx_local * cos_yaw - vy_local * sin_yaw
@@ -671,7 +751,7 @@ class CMGMotionLib:
         root_vel[:, 2] = 0.0
 
         root_ang_vel = torch.zeros(n, 3, device=self._device)
-        root_ang_vel[:, 2] = self._commands[env_ids, 2]  # yaw rate
+        root_ang_vel[:, 2] = self._actual_commands[env_ids, 2]  # yaw rate
 
         # Compute key body positions using forward kinematics
         local_key_body_pos = self._fk.compute_body_positions(root_pos, root_rot, dof_pos)
@@ -751,9 +831,11 @@ class CMGMotionLib:
         return [f"cmg_vx{self._vx_range}_vy{self._vy_range}_yaw{self._yaw_range}"]
 
     def get_commands(self) -> torch.Tensor:
-        """Get current velocity commands for all environments.
-        Returns mirrored commands (vy, yaw negated) for mirrored environments."""
-        commands = self._commands.clone()
+        """Get estimated actual velocity commands for all environments.
+        Returns mirrored commands (vy, yaw negated) for mirrored environments.
+        These reflect the actual gait velocity estimated from DOF velocities,
+        not the raw input commands used to condition CMG."""
+        commands = self._actual_commands.clone()
         mirror = self._mirror_flags
         if mirror.any():
             commands[mirror, 1] *= -1  # flip vy

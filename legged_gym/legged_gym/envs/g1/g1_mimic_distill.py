@@ -289,7 +289,13 @@ class G1MimicDistill(HumanoidMimic):
                             self.reindex(self.dof_vel * self.obs_scales.dof_vel),
                             self.reindex(self.action_history_buf[:, -1]),
                             ),dim=-1)
-        
+
+        # Append velocity commands before noise so noise_scale_vec covers all dims
+        # (noise_scale_vec has 0 for cmd dims → commands are not corrupted by noise)
+        if getattr(self.cfg.env, 'use_cmd_obs', False) and getattr(self, '_use_cmg', False):
+            cmd = self._motion_lib.get_commands()  # (num_envs, 3): [vx, vy, yaw_rate]
+            proprio_obs_buf = torch.cat([proprio_obs_buf, cmd], dim=-1)
+
         if self.cfg.noise.add_noise and self.headless:
             proprio_obs_buf += (2 * torch.rand_like(proprio_obs_buf) - 1) * self.noise_scale_vec * min(self.total_env_steps_counter / (self.cfg.noise.noise_increasing_steps * 24),  1.)
         elif self.cfg.noise.add_noise and not self.headless:

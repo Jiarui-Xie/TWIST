@@ -189,8 +189,8 @@ class G1MimicPrivCfg(HumanoidMimicCfg):
         class scales:
             tracking_joint_dof = 0.6
             tracking_joint_vel = 0.2
-            tracking_root_pose = 0.6
-            tracking_root_vel = 1.0
+            tracking_root_pose = 0.0
+            tracking_root_vel = 0.0
             # tracking_keybody_pos = 0.6
             tracking_keybody_pos = 2.0
             
@@ -370,8 +370,8 @@ class G1MimicStuRLCfg(G1MimicPrivCfg):
         class scales:
             tracking_joint_dof = 0.6
             tracking_joint_vel = 0.2
-            tracking_root_pose = 0.6
-            tracking_root_vel = 1.0
+            tracking_root_pose = 0.0
+            tracking_root_vel = 0.0
             # tracking_keybody_pos = 0.6
             tracking_keybody_pos = 2.0
             
@@ -551,14 +551,25 @@ class G1MimicCMGBaseCfg(G1MimicPrivCfg):
                      0.3, 0.3, 0.3, 0.4,             # Right Arm (reduced from 0.8,0.8,0.8,1.0)
                      ]
 
+        # Add velocity commands [vx, vy, yaw] to observation (3 extra dims)
+        use_cmd_obs = True
+        num_actions = 23
+        n_cmd = 3
+        n_proprio = 3 + 2 + 3 * num_actions + n_cmd        # 77: ang_vel+imu+dof_pos+dof_vel+actions+cmds
+        # Recalculate derived obs dimensions (n_priv_mimic_obs=1160, n_priv_info=84 unchanged)
+        n_obs_single = 1160 + n_proprio + 84               # 1321
+        n_priv_obs_single = n_obs_single                   # 1321 (teacher uses priv obs)
+        num_observations = n_obs_single                    # 1321
+        num_privileged_obs = n_priv_obs_single             # 1321
+
     class rewards(G1MimicPrivCfg.rewards):
         """CMG-specific rewards including velocity command tracking."""
         class scales(G1MimicPrivCfg.rewards.scales):
             # Inherit all existing reward scales
             tracking_joint_dof = 0.6
             tracking_joint_vel = 0.2
-            tracking_root_pose = 0.2
-            tracking_root_vel = 0.8
+            tracking_root_pose = 0.0
+            tracking_root_vel = 0.0
             tracking_keybody_pos = 2.0  # Now only tracks lower body (ankles, knees)
             tracking_keybody_pos_upper = 0.3  # Weak upper body tracking (hands, elbows, head)
 
@@ -629,6 +640,126 @@ class G1MimicCMGFastCfg(G1MimicCMGBaseCfg):
         cmg_yaw_range = [-0.5, 0.5]
 
 
+# ==================== Velocity-Tracking Dominant CMG Configurations ====================
+# These configs prioritize velocity command tracking over motion imitation.
+# Designed for fine-tuning from existing walking checkpoints.
+# Key changes vs base CMG:
+#   - tracking_cmd_vel:  1.5 → 4.0  (primary objective)
+#   - tracking_cmd_yaw:  1.0 → 2.5  (primary objective)
+#   - tracking_keybody_pos: 2.0 → 0.5  (demoted to regularization)
+#   - tracking_keybody_pos_upper: 0.3 → 0.1  (very weak)
+#   - tracking_joint_dof: 0.6 → 0.2  (soft constraint only)
+#   - tracking_joint_vel: 0.2 → 0.05  (minimal)
+#   - action_rate: -0.01 → -0.02  (smoother actions)
+
+
+class G1MimicCMGVelTrackBaseCfg(G1MimicCMGBaseCfg):
+    """Velocity-tracking dominant CMG base config.
+    
+    Resume from a walking checkpoint and fine-tune with velocity tracking
+    as the primary training objective. Motion imitation is weakened to
+    serve as a soft regularizer that maintains natural gait.
+    """
+
+    class env(G1MimicCMGBaseCfg.env):
+        # Inherit all CMG env settings
+        track_root = False
+        rand_reset = False
+
+        # Keep CMG DOF weights but further relax upper body
+        dof_err_w = [1.0, 0.8, 0.8, 1.0, 0.5, 0.5,  # Left Leg
+                     1.0, 0.8, 0.8, 1.0, 0.5, 0.5,  # Right Leg
+                     0.4, 0.4, 0.4,                    # Waist (relaxed from 0.6)
+                     0.2, 0.2, 0.2, 0.3,              # Left Arm (relaxed from 0.3)
+                     0.2, 0.2, 0.2, 0.3,              # Right Arm (relaxed from 0.3)
+                     ]
+
+        use_cmd_obs = True
+        num_actions = 23
+        n_cmd = 3
+        n_proprio = 3 + 2 + 3 * num_actions + n_cmd
+        n_obs_single = 1160 + n_proprio + 84
+        n_priv_obs_single = n_obs_single
+        num_observations = n_obs_single
+        num_privileged_obs = n_priv_obs_single
+
+    class rewards(G1MimicCMGBaseCfg.rewards):
+        """Velocity-tracking dominant rewards.
+        
+        Reward priority:
+          1. Velocity command tracking (cmd_vel=3.0, cmd_yaw=2.0) - PRIMARY
+          2. Motion imitation (keybody=1.2, upper=0.8, joint=0.4) - IMPORTANT SECONDARY
+          3. Gait quality (feet_air_time=5.0) - GAIT SHAPING
+        """
+        class scales(G1MimicCMGBaseCfg.rewards.scales):
+            # ===== PRIMARY: Velocity command tracking =====
+            tracking_cmd_vel = 3.0    # vx, vy tracking (was 1.5, prev_vt 4.0)
+            tracking_cmd_yaw = 2.0    # yaw rate tracking (was 1.0, prev_vt 2.5)
+
+            # ===== SECONDARY: Motion imitation — keep natural posture =====
+            tracking_keybody_pos = 1.2        # Lower body keybody (was 2.0, prev_vt 0.5)
+            tracking_keybody_pos_upper = 0.8  # Upper body (was 0.3, prev_vt 0.1) — prevent arm flailing
+            tracking_joint_dof = 0.4          # Joint angles (was 0.6, prev_vt 0.2)
+            tracking_joint_vel = 0.1          # Joint velocities (was 0.2, prev_vt 0.05)
+            tracking_root_pose = 0.0
+            tracking_root_vel = 0.0
+
+            # ===== Regularization =====
+            action_symmetry = 0.1
+            feet_slip = -0.1
+            feet_contact_forces = -5e-4
+            feet_stumble = -1.25
+            dof_pos_limits = -5.0
+            dof_torque_limits = -1.0
+            dof_vel = -1e-4
+            dof_acc = -5e-8
+            action_rate = -0.02       # Slightly stronger smoothness (was -0.01)
+            feet_air_time = 5.0
+            ang_vel_xy = -0.01
+
+
+class G1MimicCMGSlowVTCfg(G1MimicCMGVelTrackBaseCfg):
+    """Slow speed velocity-tracking config (~1 m/s). Resume from cmg_slow checkpoint."""
+
+    class motion(G1MimicCMGVelTrackBaseCfg.motion):
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_dt = 0.02
+        motion_curriculum = False
+        cmg_vx_range = [0.5, 1.5]
+        cmg_vy_range = [-0.3, 0.3]
+        cmg_yaw_range = [-0.5, 0.5]
+
+
+class G1MimicCMGMediumVTCfg(G1MimicCMGVelTrackBaseCfg):
+    """Medium speed velocity-tracking config (~2 m/s). Resume from cmg_medium checkpoint."""
+
+    class motion(G1MimicCMGVelTrackBaseCfg.motion):
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_dt = 0.02
+        motion_curriculum = False
+        cmg_vx_range = [1.5, 2.5]
+        cmg_vy_range = [-0.5, 0.5]
+        cmg_yaw_range = [-0.5, 0.5]
+
+
+class G1MimicCMGFastVTCfg(G1MimicCMGVelTrackBaseCfg):
+    """Fast speed velocity-tracking config (~3 m/s). Resume from cmg_fast checkpoint."""
+
+    class motion(G1MimicCMGVelTrackBaseCfg.motion):
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_dt = 0.02
+        motion_curriculum = False
+        cmg_vx_range = [2.5, 3.5]
+        cmg_vy_range = [-0.5, 0.5]
+        cmg_yaw_range = [-0.5, 0.5]
+
+
 # PPO configurations for CMG environments
 class G1MimicCMGSlowCfgPPO(G1MimicPrivCfgPPO):
     seed = 1
@@ -664,3 +795,108 @@ class G1MimicCMGFastCfgPPO(G1MimicPrivCfgPPO):
         max_iterations = 30_002
         save_interval = 500
         experiment_name = 'cmg_fast'
+
+
+# PPO configs for velocity-tracking variants
+class G1MimicCMGSlowVTCfgPPO(G1MimicPrivCfgPPO):
+    seed = 1
+
+    class runner(G1MimicPrivCfgPPO.runner):
+        policy_class_name = 'ActorCriticMimic'
+        algorithm_class_name = 'PPO'
+        runner_class_name = 'OnPolicyRunnerMimic'
+        max_iterations = 30_002
+        save_interval = 500
+        experiment_name = 'cmg_slow_vt'
+
+
+class G1MimicCMGMediumVTCfgPPO(G1MimicPrivCfgPPO):
+    seed = 1
+
+    class runner(G1MimicPrivCfgPPO.runner):
+        policy_class_name = 'ActorCriticMimic'
+        algorithm_class_name = 'PPO'
+        runner_class_name = 'OnPolicyRunnerMimic'
+        max_iterations = 30_002
+        save_interval = 500
+        experiment_name = 'cmg_medium_vt'
+
+
+class G1MimicCMGFastVTCfgPPO(G1MimicPrivCfgPPO):
+    seed = 1
+
+    class runner(G1MimicPrivCfgPPO.runner):
+        policy_class_name = 'ActorCriticMimic'
+        algorithm_class_name = 'PPO'
+        runner_class_name = 'OnPolicyRunnerMimic'
+        max_iterations = 30_002
+        save_interval = 500
+        experiment_name = 'cmg_fast_vt'
+
+
+# ==================== CMG Student Configurations ====================
+
+class G1MimicCMGStuRLCfg(G1MimicCMGBaseCfg):
+    """CMG student (proprioceptive-only) environment config for DAgger distillation.
+    Obs: mimic_obs(31) + proprio(74) + cmd(3) = 108 per step, stacked over 11 steps = 1188 total.
+    """
+
+    class env(G1MimicCMGBaseCfg.env):
+        obs_type = 'student'
+
+        # n_proprio = 77 inherited from CMGBaseCfg (includes velocity commands)
+        # history_len = 10 inherited
+        n_mimic_obs = 8 + 23                               # 31: single-step reference (no key bodies)
+        n_obs_single = n_mimic_obs + 77                    # 108: student obs per step
+        n_priv_obs_single = 1160 + 77 + 84                 # 1321: privileged (critic / teacher)
+        num_observations = n_obs_single * (10 + 1)         # 1188: student obs + 10-step history
+        num_privileged_obs = n_priv_obs_single             # 1321
+
+
+class G1MimicCMGStuRLCfgDAgger(G1MimicCMGStuRLCfg):
+    """DAgger distillation: CMG teacher → CMG student.
+    Default teacher: cmg_slow. Override teacher_experiment_name/teacher_proj_name for other speeds.
+    """
+    seed = 1
+
+    class teachercfg(G1MimicCMGSlowCfgPPO):
+        pass
+
+    class runner(G1MimicPrivCfgPPO.runner):
+        policy_class_name = 'ActorCriticMimic'
+        algorithm_class_name = 'DaggerPPO'
+        runner_class_name = 'OnPolicyDaggerRunner'
+        max_iterations = 30_002
+        warm_iters = 100
+
+        save_interval = 500
+        experiment_name = 'test'
+        run_name = ''
+        resume = False
+        load_run = -1
+        checkpoint = -1
+        resume_path = None
+
+        teacher_experiment_name = 'cmg_slow'
+        teacher_proj_name = 'cmg_slow'
+        teacher_checkpoint = -1
+        eval_student = False
+
+    class algorithm(HumanoidMimicCfgPPO.algorithm):
+        grad_penalty_coef_schedule = [0.00, 0.00, 700, 1000]
+        std_schedule = [1.0, 0.4, 4000, 1500]
+        entropy_coef = 0.005
+
+        dagger_coef_anneal_steps = 60000
+        dagger_coef = 0.1
+        dagger_coef_min = 0.01
+
+    class policy(G1MimicPrivCfgPPO.policy):
+        action_std = [0.7] * 12 + [0.4] * 3 + [0.5] * 8
+        init_noise_std = 1.0
+        obs_context_len = 11
+        actor_hidden_dims = [512, 512, 256, 128]
+        critic_hidden_dims = [512, 512, 256, 128]
+        activation = 'silu'
+        layer_norm = True
+        motion_latent_dim = 128
