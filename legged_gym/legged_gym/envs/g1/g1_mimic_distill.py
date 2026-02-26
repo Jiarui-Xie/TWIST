@@ -293,7 +293,7 @@ class G1MimicDistill(HumanoidMimic):
         # Append velocity commands before noise so noise_scale_vec covers all dims
         # (noise_scale_vec has 0 for cmd dims → commands are not corrupted by noise)
         if getattr(self.cfg.env, 'use_cmd_obs', False) and getattr(self, '_use_cmg', False):
-            cmd = self._motion_lib.get_commands()  # (num_envs, 3): [vx, vy, yaw_rate]
+            cmd = self._motion_lib.get_user_commands()  # (num_envs, 3): raw user [vx, vy, yaw_rate]
             proprio_obs_buf = torch.cat([proprio_obs_buf, cmd], dim=-1)
 
         if self.cfg.noise.add_noise and self.headless:

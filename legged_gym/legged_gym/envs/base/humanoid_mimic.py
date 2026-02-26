@@ -769,14 +769,17 @@ class HumanoidMimic(HumanoidChar):
         """
         Reward for tracking CMG velocity commands (vx, vy in local frame).
         Only active when using CMG motion generation.
+        Uses raw user commands (_commands) as target so the policy is directly
+        incentivized to achieve the commanded velocity in physics simulation,
+        rather than chasing a noisy kinematic estimate (_actual_commands).
         """
         if not getattr(self, '_use_cmg', False):
             return torch.zeros(self.num_envs, device=self.device)
 
-        # Get CMG commands: [vx, vy, yaw_rate] in local frame
-        cmg_commands = self._motion_lib.get_commands()  # (num_envs, 3)
-        cmd_vx = cmg_commands[:, 0]
-        cmd_vy = cmg_commands[:, 1]
+        # Raw user commands with mirror correction for mirrored environments
+        user_commands = self._motion_lib.get_user_commands()
+        cmd_vx = user_commands[:, 0]
+        cmd_vy = user_commands[:, 1]
 
         # Robot's actual velocity in local frame
         actual_vx = self.base_lin_vel[:, 0]
@@ -795,13 +798,14 @@ class HumanoidMimic(HumanoidChar):
         """
         Reward for tracking CMG yaw rate command.
         Only active when using CMG motion generation.
+        Uses raw user commands (_commands) as target, not the kinematic
+        estimate (_actual_commands).
         """
         if not getattr(self, '_use_cmg', False):
             return torch.zeros(self.num_envs, device=self.device)
 
-        # Get CMG yaw rate command
-        cmg_commands = self._motion_lib.get_commands()  # (num_envs, 3)
-        cmd_yaw_rate = cmg_commands[:, 2]
+        # Raw user commands with mirror correction for mirrored environments
+        cmd_yaw_rate = self._motion_lib.get_user_commands()[:, 2]
 
         # Robot's actual yaw rate (z component of angular velocity in local frame)
         actual_yaw_rate = self.base_ang_vel[:, 2]

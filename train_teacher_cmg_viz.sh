@@ -80,7 +80,7 @@ python train.py \
     --exptid $EXPTID \
     --device $DEVICE \
     --num_envs 1024 \
-    --max_iterations 2001 \
+    --max_iterations 8001 \
     --headless \
     $RESUME_ARGS
 

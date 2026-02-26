@@ -131,8 +131,8 @@ Reward implementations in `humanoid_mimic.py`, scales in `g1_mimic_distill_confi
 
 ### CMG-specific rewards:
 - `tracking_keybody_pos_upper`: Weak upper body tracking — hands, elbows, head (scale: 0.3, exp_scale=5.0 vs lower body 10.0)
-- `tracking_cmd_vel`: Track vx/vy commands (scale: 1.5)
-- `tracking_cmd_yaw`: Track yaw rate command (scale: 1.0)
+- `tracking_cmd_vel`: Track vx/vy commands (scale: 1.5) — target is raw user `_commands`, not kinematic estimate
+- `tracking_cmd_yaw`: Track yaw rate command (scale: 1.0) — same, uses raw `_commands`
 - `action_symmetry`: Weak left-right action symmetry (scale: 0.1)
 
 ### CMG Left-Right Mirroring
@@ -150,7 +150,7 @@ CMG 模式下速度指令 `[vx, vy, yaw_rate]` 被加入观测，使策略能显
 
 - `use_cmd_obs = True` 在 `G1MimicCMGBaseCfg.env` 中启用
 - 指令追加在 `proprio_obs_buf` 中、噪声添加之前（命令本身不加噪）
-- 指令来源：`CMGMotionLib.get_commands()` → 返回经速度估计校准的 `_actual_commands`（含镜像修正）
+- 指令来源：`CMGMotionLib.get_user_commands()` → 返回原始 `_commands`（含镜像修正），与奖励目标一致
 - **Teacher** 可同时观测指令速度（`proprio`）和实际速度（`base_lin_vel` 在 `priv_info`）
 - **Student** 可观测指令速度，实际速度通过 DAgger 蒸馏隐式学习
 
@@ -162,13 +162,16 @@ CMG 模式下速度指令 `[vx, vy, yaw_rate]` 被加入观测，使策略能显
 | CMG teacher (`G1MimicCMGBaseCfg`) | 77 (+3 cmd) | 1321 | 1321 |
 | CMG student (`G1MimicCMGStuRLCfg`) | 77 (+3 cmd) | 108 | 1188 (×11 history) |
 
-### CMG Velocity Calibration
+### CMG Velocity Calibration (DEPRECATED)
 
-CMG generates joint trajectories conditioned on velocity commands, but the actual gait velocity may differ from the commanded velocity. A linear regression velocity estimator (`_build_velocity_estimator`) maps 29 DOF velocities → [vx, vy, yaw] using training data. After each trajectory generation:
-- `_estimate_actual_velocity()` averages per-frame predictions over frames 20-100
-- `_actual_commands` stores estimated velocities, used for root state integration and RL rewards
-- `get_commands()` returns `_actual_commands` (not raw commands), so `tracking_cmd_vel` tracks achievable velocity
-- Raw `_commands` are still used to condition CMG input
+~~`_actual_commands`~~ was a linear-regression kinematic velocity estimate. It is now **deprecated** — declared but never read. All usages replaced by raw `_commands`.
+
+`_commands` (raw user input) is used uniformly for:
+- CMG trajectory conditioning
+- Root position/velocity integration
+- `cmd_obs` (policy observation)
+- Velocity tracking reward targets (`tracking_cmd_vel`, `tracking_cmd_yaw`)
+- `get_commands()` is a deprecated alias for `get_user_commands()`
 
 ### CMG Upper Body Relaxation
 - `tracking_keybody_pos` only tracks lower body (ankles+knees) in CMG mode
@@ -208,3 +211,12 @@ python tools/test_cmg_velocity.py --vx_min 0.5 --vx_max 3.0 --vx_step 0.25
 ## Changelog
 
 All CMG-related changes: [`docs/CHANGELOG_CMG_Integration.md`](docs/CHANGELOG_CMG_Integration.md)
+
+### 2026-02-26 — Velocity Reward Target Fix
+**Problem**: `tracking_cmd_vel` / `tracking_cmd_yaw` were comparing `robot.base_lin_vel` (physics) against `_actual_commands` (linear regression estimate from CMG kinematics). These live in different worlds — the kinematic estimate is neither the user's intent nor the physics-achievable velocity, making the reward signal noisy.
+
+**Fix**:
+- Added `CMGMotionLib.get_user_commands()` in `cmg_motion_lib.py` — returns raw `_commands` with mirror correction (vy/yaw flipped for mirrored envs)
+- Updated `_reward_tracking_cmd_vel` and `_reward_tracking_cmd_yaw` in `humanoid_mimic.py` to use `get_user_commands()` instead of `get_commands()` (`_actual_commands`)
+
+**Result**: Policy is now directly incentivized to achieve the user-specified velocity in physics simulation. CMG body tracking rewards handle motion style; velocity rewards handle speed.

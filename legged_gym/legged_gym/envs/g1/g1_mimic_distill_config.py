@@ -855,11 +855,12 @@ class G1MimicCMGStuRLCfg(G1MimicCMGBaseCfg):
 
 class G1MimicCMGStuRLCfgDAgger(G1MimicCMGStuRLCfg):
     """DAgger distillation: CMG teacher → CMG student.
-    Default teacher: cmg_slow. Override teacher_experiment_name/teacher_proj_name for other speeds.
+    Teacher: global_obs_v4 (velocity-tracking CMG teacher with cmd_obs).
+    Override teacher_experiment_name via --teacher_exptid CLI arg for other teachers.
     """
     seed = 1
 
-    class teachercfg(G1MimicCMGSlowCfgPPO):
+    class teachercfg(G1MimicCMGMediumVTCfgPPO):
         pass
 
     class runner(G1MimicPrivCfgPPO.runner):
@@ -869,16 +870,16 @@ class G1MimicCMGStuRLCfgDAgger(G1MimicCMGStuRLCfg):
         max_iterations = 30_002
         warm_iters = 100
 
-        save_interval = 500
-        experiment_name = 'test'
+        save_interval = 1000
+        experiment_name = 'cmg_stu_v1'
         run_name = ''
         resume = False
         load_run = -1
         checkpoint = -1
         resume_path = None
 
-        teacher_experiment_name = 'cmg_slow'
-        teacher_proj_name = 'cmg_slow'
+        teacher_experiment_name = 'global_obs_v4'
+        teacher_proj_name = 'h1'
         teacher_checkpoint = -1
         eval_student = False
 
