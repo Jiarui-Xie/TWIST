@@ -102,7 +102,7 @@ class G1MimicDistill(HumanoidMimic):
         self.episode_length = torch.zeros((self.num_envs), device=self.device)
         self.feet_height = torch.zeros((self.num_envs, 2), device=self.device)
         self.reset_idx(torch.tensor(range(self.num_envs), device=self.device))
-        if self.obs_type == 'student':
+        if self.obs_type in ('student', 'student_cmg'):
             self.total_env_steps_counter = 24 * 100000
             self.global_counter = 24 * 100000
             # self.motion_difficulty = torch.ones_like(self.motion_difficulty)
@@ -177,7 +177,7 @@ class G1MimicDistill(HumanoidMimic):
     def _update_motion_difficulty(self, env_ids):
         if self.obs_type == 'priv':
             super()._update_motion_difficulty(env_ids)
-        elif self.obs_type == 'student':
+        elif self.obs_type in ('student', 'student_cmg'):
             super()._update_motion_difficulty(env_ids) # currently we use the same strategy for student
         else:
             return
@@ -345,6 +345,10 @@ class G1MimicDistill(HumanoidMimic):
             self.obs_buf = priv_obs_buf
         elif self.obs_type == 'student':
             self.obs_buf = torch.cat([obs_buf, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
+        elif self.obs_type == 'student_cmg':
+            # Student with 20-step future reference (same as teacher) but no privileged info
+            # obs = [priv_mimic_obs(1160) | proprio(77)] = 1237
+            self.obs_buf = torch.cat([priv_mimic_obs, proprio_obs_buf], dim=-1)
         
         if self.cfg.env.history_len > 0:
             self.privileged_obs_history_buf = torch.where(

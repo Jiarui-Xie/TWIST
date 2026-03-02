@@ -84,6 +84,15 @@ class OnPolicyRunnerMimic:
                                         num_motion_steps=len(self.env.cfg.env.tar_obs_steps),
                                         num_actions=self.env.num_actions,
                                         **self.policy_cfg).to(self.device)
+            # Override for student_cmg obs_type: use student-specific motion dimensions
+            if getattr(self.env.cfg.env, 'obs_type', 'priv') == 'student_cmg':
+                stu_motion_steps = getattr(self.env.cfg.env, 'n_stu_motion_steps', len(self.env.cfg.env.tar_obs_steps))
+                actor_critic = policy_class(num_observations=self.env.num_obs,
+                                            num_critic_observations=self.env.num_privileged_obs,
+                                            num_motion_observations=self.env.cfg.env.n_mimic_obs,
+                                            num_motion_steps=stu_motion_steps,
+                                            num_actions=self.env.num_actions,
+                                            **self.policy_cfg).to(self.device)
                 
         share_normalizer = (self.env.num_obs == self.env.num_privileged_obs) or self.env.num_privileged_obs is None
             

@@ -47,6 +47,7 @@ from .g1.g1_mimic_distill_config import (
     G1MimicCMGMediumVTCfg, G1MimicCMGMediumVTCfgPPO,
     G1MimicCMGFastVTCfg, G1MimicCMGFastVTCfgPPO,
     G1MimicCMGStuRLCfg, G1MimicCMGStuRLCfgDAgger,
+    G1MimicCMGStuV2Cfg, G1MimicCMGStuV2CfgDAgger,
 )
 
 from legged_gym.gym_utils.task_registry import task_registry
@@ -69,4 +70,7 @@ task_registry.register("g1_cmg_fast_vt", G1MimicDistill, G1MimicCMGFastVTCfg(), 
 
 # CMG student (DAgger distillation from CMG teacher)
 task_registry.register("g1_cmg_stu_rl", G1MimicDistill, G1MimicCMGStuRLCfg(), G1MimicCMGStuRLCfgDAgger())
+
+# CMG student V2 (full 20-step future reference, no privileged info)
+task_registry.register("g1_cmg_stu_v2", G1MimicDistill, G1MimicCMGStuV2Cfg(), G1MimicCMGStuV2CfgDAgger())
 

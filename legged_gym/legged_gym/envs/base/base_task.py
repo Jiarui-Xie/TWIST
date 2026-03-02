@@ -121,6 +121,21 @@ class BaseTask():
                 self.viewer, gymapi.KEY_MINUS, "prev_motion")
             self.gym.subscribe_viewer_keyboard_event(
                 self.viewer, gymapi.KEY_EQUAL, "next_motion")
+            # Arrow keys for CMG velocity command control
+            self.gym.subscribe_viewer_keyboard_event(
+                self.viewer, gymapi.KEY_UP, "cmg_vx_plus")
+            self.gym.subscribe_viewer_keyboard_event(
+                self.viewer, gymapi.KEY_DOWN, "cmg_vx_minus")
+            self.gym.subscribe_viewer_keyboard_event(
+                self.viewer, gymapi.KEY_LEFT, "cmg_yaw_plus")
+            self.gym.subscribe_viewer_keyboard_event(
+                self.viewer, gymapi.KEY_RIGHT, "cmg_yaw_minus")
+            self.gym.subscribe_viewer_keyboard_event(
+                self.viewer, gymapi.KEY_A, "cmg_vy_plus")
+            self.gym.subscribe_viewer_keyboard_event(
+                self.viewer, gymapi.KEY_D, "cmg_vy_minus")
+            self.gym.subscribe_viewer_keyboard_event(
+                self.viewer, gymapi.KEY_R, "cmg_reset_cmd")
         self.free_cam = False
         self.lookat_id = 0
         self.lookat_vec = torch.tensor([-0, 2, 1], requires_grad=False, device=self.device)
@@ -190,6 +205,48 @@ class BaseTask():
                     if evt.action == "prev_motion" and evt.value > 0:
                         self._motion_ids[self.lookat_id] = (self._motion_ids[self.lookat_id] - 1) % self._motion_lib.num_motions()
                         print("curr motion name: ", self.motion_names[self._motion_ids[self.lookat_id]])
+                    # CMG velocity command control via arrow keys
+                    if hasattr(self, '_motion_lib') and hasattr(self._motion_lib, '_commands'):
+                        _VX_STEP  = 0.2
+                        _YAW_STEP = 0.2
+                        _VX_MIN, _VX_MAX   = 0.0, 4.0
+                        _YAW_MIN, _YAW_MAX = -1.5, 1.5
+                        env_ids = torch.arange(self.num_envs, device=self.device)
+                        cmds = self._motion_lib._commands.clone()  # (num_envs, 3)
+                        if evt.action == "cmg_vx_plus" and evt.value > 0:
+                            cmds[:, 0] = (cmds[:, 0] + _VX_STEP).clamp(_VX_MIN, _VX_MAX)
+                            self._motion_lib.set_commands(env_ids, cmds)
+                            print(f"[CMG] vx={cmds[0,0]:.2f}  vy={cmds[0,1]:.2f}  yaw={cmds[0,2]:.2f}")
+                        elif evt.action == "cmg_vx_minus" and evt.value > 0:
+                            cmds[:, 0] = (cmds[:, 0] - _VX_STEP).clamp(_VX_MIN, _VX_MAX)
+                            self._motion_lib.set_commands(env_ids, cmds)
+                            print(f"[CMG] vx={cmds[0,0]:.2f}  vy={cmds[0,1]:.2f}  yaw={cmds[0,2]:.2f}")
+                        elif evt.action == "cmg_yaw_plus" and evt.value > 0:
+                            cmds[:, 2] = (cmds[:, 2] + _YAW_STEP).clamp(_YAW_MIN, _YAW_MAX)
+                            self._motion_lib.set_commands(env_ids, cmds)
+                            print(f"[CMG] vx={cmds[0,0]:.2f}  vy={cmds[0,1]:.2f}  yaw={cmds[0,2]:.2f}")
+                        elif evt.action == "cmg_yaw_minus" and evt.value > 0:
+                            cmds[:, 2] = (cmds[:, 2] - _YAW_STEP).clamp(_YAW_MIN, _YAW_MAX)
+                            self._motion_lib.set_commands(env_ids, cmds)
+                            print(f"[CMG] vx={cmds[0,0]:.2f}  vy={cmds[0,1]:.2f}  yaw={cmds[0,2]:.2f}")
+                        elif evt.action == "cmg_vy_plus" and evt.value > 0:
+                            _VY_STEP = 0.1
+                            _VY_MIN, _VY_MAX = -0.8, 0.8
+                            cmds[:, 1] = (cmds[:, 1] + _VY_STEP).clamp(_VY_MIN, _VY_MAX)
+                            self._motion_lib.set_commands(env_ids, cmds)
+                            print(f"[CMG] vx={cmds[0,0]:.2f}  vy={cmds[0,1]:.2f}  yaw={cmds[0,2]:.2f}")
+                        elif evt.action == "cmg_vy_minus" and evt.value > 0:
+                            _VY_STEP = 0.1
+                            _VY_MIN, _VY_MAX = -0.8, 0.8
+                            cmds[:, 1] = (cmds[:, 1] - _VY_STEP).clamp(_VY_MIN, _VY_MAX)
+                            self._motion_lib.set_commands(env_ids, cmds)
+                            print(f"[CMG] vx={cmds[0,0]:.2f}  vy={cmds[0,1]:.2f}  yaw={cmds[0,2]:.2f}")
+                        elif evt.action == "cmg_reset_cmd" and evt.value > 0:
+                            cmds[:, 0] = 1.5  # reset to medium speed
+                            cmds[:, 1] = 0.0
+                            cmds[:, 2] = 0.0
+                            self._motion_lib.set_commands(env_ids, cmds)
+                            print(f"[CMG] Reset commands: vx={cmds[0,0]:.2f}  vy={cmds[0,1]:.2f}  yaw={cmds[0,2]:.2f}")
                 if evt.action == "free_cam" and evt.value > 0:
                     self.free_cam = not self.free_cam
                     if self.free_cam:

@@ -838,8 +838,20 @@ class G1MimicCMGFastVTCfgPPO(G1MimicPrivCfgPPO):
 
 class G1MimicCMGStuRLCfg(G1MimicCMGBaseCfg):
     """CMG student (proprioceptive-only) environment config for DAgger distillation.
-    Obs: mimic_obs(31) + proprio(74) + cmd(3) = 108 per step, stacked over 11 steps = 1188 total.
+    Obs: mimic_obs(31) + proprio(77, with cmd) = 108 per step, stacked over 11 steps = 1188 total.
+    Uses medium speed range to match global_obs_v4 teacher.
     """
+
+    class motion(G1MimicCMGBaseCfg.motion):
+        # Match teacher's medium speed range
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_dt = 0.02
+        motion_curriculum = False
+        cmg_vx_range = [1.5, 2.5]
+        cmg_vy_range = [-0.5, 0.5]
+        cmg_yaw_range = [-0.5, 0.5]
 
     class env(G1MimicCMGBaseCfg.env):
         obs_type = 'student'
@@ -872,6 +884,116 @@ class G1MimicCMGStuRLCfgDAgger(G1MimicCMGStuRLCfg):
 
         save_interval = 1000
         experiment_name = 'cmg_stu_v1'
+        run_name = ''
+        resume = False
+        load_run = -1
+        checkpoint = -1
+        resume_path = None
+
+        teacher_experiment_name = 'global_obs_v4'
+        teacher_proj_name = 'h1'
+        teacher_checkpoint = -1
+        eval_student = False
+
+    class algorithm(HumanoidMimicCfgPPO.algorithm):
+        grad_penalty_coef_schedule = [0.00, 0.00, 700, 1000]
+        std_schedule = [1.0, 0.4, 4000, 1500]
+        entropy_coef = 0.005
+
+        dagger_coef_anneal_steps = 60000
+        dagger_coef = 0.1
+        dagger_coef_min = 0.01
+
+    class policy(G1MimicPrivCfgPPO.policy):
+        action_std = [0.7] * 12 + [0.4] * 3 + [0.5] * 8
+        init_noise_std = 1.0
+        obs_context_len = 11
+        actor_hidden_dims = [512, 512, 256, 128]
+        critic_hidden_dims = [512, 512, 256, 128]
+        activation = 'silu'
+        layer_norm = True
+        motion_latent_dim = 128
+
+
+# ==================== CMG Student V2: Full Future Reference ====================
+# Unlike the original student (1-step mimic, 11-frame history stacking),
+# this student gets the same 20-step future reference as the teacher,
+# but WITHOUT privileged info (base_lin_vel, key_body_pos, contacts, DR params).
+#
+# Rationale: CMG runs on the real robot and can provide future trajectory.
+# The only truly unprivileged info is priv_info (84 dims).
+#
+# Student obs:  priv_mimic_obs(1160) + proprio(77) = 1237
+# Critic obs:   priv_mimic_obs(1160) + proprio(77) + priv_info(84) = 1321
+
+
+class G1MimicCMGStuV2Cfg(G1MimicCMGBaseCfg):
+    """CMG student V2: full 20-step future reference, no privileged info.
+    
+    This student receives the same motion reference as the teacher (20 future steps
+    with key body positions = 1160 dims) plus proprioception (77 dims), but does NOT
+    receive privileged information (base linear velocity, key body global positions,
+    contact forces, domain randomization parameters = 84 dims).
+    
+    The key insight is that CMG runs on the real robot, so its future trajectory
+    predictions are fully available for deployment. Only the simulator-specific
+    privileged info needs to be removed.
+    """
+
+    class motion(G1MimicCMGBaseCfg.motion):
+        # Match teacher's medium speed range
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_dt = 0.02
+        motion_curriculum = False
+        cmg_vx_range = [1.5, 2.5]
+        cmg_vy_range = [-0.5, 0.5]
+        cmg_yaw_range = [-0.5, 0.5]
+
+    class env(G1MimicCMGBaseCfg.env):
+        obs_type = 'student_cmg'
+
+        use_cmd_obs = True
+        num_actions = 23
+        n_cmd = 3
+        n_proprio = 3 + 2 + 3 * num_actions + n_cmd                 # 77
+
+        # Student gets same mimic obs as teacher (20 steps × 58 dims)
+        n_priv_mimic_obs = 1160                                       # 20 steps of full reference
+        n_mimic_obs = n_priv_mimic_obs                                # student mimic = teacher mimic
+        n_stu_motion_steps = 20                                       # student also uses 20 motion steps
+
+        # Student obs: priv_mimic_obs + proprio (no priv_info, no history)
+        n_obs_single = n_priv_mimic_obs + n_proprio                   # 1237
+        n_priv_obs_single = n_priv_mimic_obs + n_proprio + 84         # 1321: privileged (critic/teacher)
+
+        num_observations = n_obs_single                               # 1237
+        num_privileged_obs = n_priv_obs_single                        # 1321
+
+        history_len = 10  # still needed for privileged_obs_history_buf (teacher/critic)
+
+
+class G1MimicCMGStuV2CfgDAgger(G1MimicCMGStuV2Cfg):
+    """DAgger distillation V2: CMG teacher → CMG student with full future reference.
+    
+    Teacher: global_obs_v4 (velocity-tracking CMG teacher).
+    Student: gets same 20-step mimic_obs, learns without privileged info.
+    """
+    seed = 1
+
+    class teachercfg(G1MimicCMGMediumVTCfgPPO):
+        pass
+
+    class runner(G1MimicPrivCfgPPO.runner):
+        policy_class_name = 'ActorCriticMimic'
+        algorithm_class_name = 'DaggerPPO'
+        runner_class_name = 'OnPolicyDaggerRunner'
+        max_iterations = 30_002
+        warm_iters = 100
+
+        save_interval = 1000
+        experiment_name = 'cmg_stu_v2'
         run_name = ''
         resume = False
         load_run = -1

@@ -117,10 +117,12 @@ class OnPolicyDaggerRunner:
         
         
         policy_class = eval(self.cfg["policy_class_name"])
+        # Support configurable student motion steps (default: 1 for legacy student, 20 for student_cmg)
+        stu_motion_steps = getattr(self.env.cfg.env, 'n_stu_motion_steps', 1)
         actor_critic = policy_class(num_observations=self.env.num_obs,
                                     num_critic_observations=self.env.num_privileged_obs,
                                     num_motion_observations=self.env.cfg.env.n_mimic_obs,
-                                    num_motion_steps=1,
+                                    num_motion_steps=stu_motion_steps,
                                     num_actions=self.env.num_actions,
                                     **self.policy_cfg).to(self.device)
                 
@@ -279,18 +281,9 @@ class OnPolicyDaggerRunner:
             learn_time = stop - start
             if self.log_dir is not None:
                 self.log(locals())
-            if it < 2500:
-                if it % self.save_interval == 0:
-                    self.current_learning_iteration = it
-                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
-            elif it < 5000:
-                if it % (2*self.save_interval) == 0:
-                    self.current_learning_iteration = it
-                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
-            else:
-                if it % (5*self.save_interval) == 0:
-                    self.current_learning_iteration = it
-                    self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
+            if it % self.save_interval == 0:
+                self.current_learning_iteration = it
+                self.save(os.path.join(self.log_dir, 'model_{}.pt'.format(it)))
             ep_infos.clear()
         
         # self.current_learning_iteration += num_learning_iterations

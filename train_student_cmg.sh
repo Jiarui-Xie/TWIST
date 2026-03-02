@@ -38,7 +38,8 @@ python train.py \
     --teacher_exptid $TEACHER_EXPTID \
     --teacher_checkpoint $TEACHER_CHECKPOINT \
     --device $DEVICE \
-    --num_envs 4096 \
+    --num_envs 1024 \
+    --max_iterations 10001 \
     --headless
 
 echo "Student distillation complete!"
