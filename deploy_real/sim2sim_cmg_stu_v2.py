@@ -204,12 +204,12 @@ class CMGStuV2SimController:
         KEY_DOWN  = 264
         KEY_LEFT  = 263
         KEY_RIGHT = 262
-        KEY_A     = 65
-        KEY_D     = 68
+        KEY_Q     = 81
+        KEY_E     = 69
         KEY_R     = 82
 
         def key_callback(keycode):
-            cmd = self.cmg._commands[0]   # (3,) on device
+            cmd = self.cmg._target_commands[0]   # (3,) on device
             changed = True
             if keycode == KEY_UP:
                 cmd[0] = (cmd[0] + self._VX_STEP).clamp(self._VX_MIN, self._VX_MAX)
@@ -219,9 +219,9 @@ class CMGStuV2SimController:
                 cmd[2] = (cmd[2] + self._YAW_STEP).clamp(self._YAW_MIN, self._YAW_MAX)
             elif keycode == KEY_RIGHT:
                 cmd[2] = (cmd[2] - self._YAW_STEP).clamp(self._YAW_MIN, self._YAW_MAX)
-            elif keycode == KEY_A:
+            elif keycode == KEY_Q:
                 cmd[1] = (cmd[1] + self._VY_STEP).clamp(self._VY_MIN, self._VY_MAX)
-            elif keycode == KEY_D:
+            elif keycode == KEY_E:
                 cmd[1] = (cmd[1] - self._VY_STEP).clamp(self._VY_MIN, self._VY_MAX)
             elif keycode == KEY_R:
                 cmd[0] = torch.tensor(self._init_vx, device=self.device)
@@ -230,6 +230,14 @@ class CMGStuV2SimController:
             else:
                 changed = False
             if changed:
+                # Sync _commands so CMG obs/rewards see the new value immediately
+                self.cmg._commands[0] = cmd.clone()
+                # Force trajectory regeneration with new command
+                env_ids = torch.zeros(1, dtype=torch.long, device=self.device)
+                frame_idx = min(self.cmg._buffer_frame_idx[0].item(),
+                                self.cmg.TRAJECTORY_BUFFER_FRAMES - 1)
+                self.cmg._current_motion_norm[0] = self.cmg._trajectory_buffer[0, frame_idx]
+                self.cmg._generate_trajectory(env_ids)
                 print(f"[CMG cmd]  vx={cmd[0]:.2f}  vy={cmd[1]:.2f}  yaw={cmd[2]:.2f}")
 
         # ── MuJoCo viewer (key_callback passed at construction time) ──────
@@ -244,12 +252,12 @@ class CMGStuV2SimController:
 
         # 25-DoF mujoco default  (wrist-roll included, zero)
         self.mujoco_default_qpos = np.concatenate([
-            [0, 0, 0.793], [1, 0, 0, 0],
+            [0, 0, 1.0], [1, 0, 0, 0],
             [-0.2, 0.0, 0.0, 0.4, -0.2, 0.0,   # L leg
              -0.2, 0.0, 0.0, 0.4, -0.2, 0.0,   # R leg
               0.0, 0.0, 0.0,                    # waist
-              0.0, 0.2, 0.0, 1.2, 0.0,          # L arm + wrist-roll
-              0.0,-0.2, 0.0, 1.2, 0.0]          # R arm + wrist-roll
+              0.0, 0.4, 0.0, 1.2, 0.0,          # L arm + wrist-roll
+              0.0,-0.4, 0.0, 1.2, 0.0]          # R arm + wrist-roll
         ], dtype=np.float32)
 
         self.stiffness = np.array([
@@ -326,7 +334,7 @@ class CMGStuV2SimController:
 
         steps = int(duration_s / SIM_DT)
         print(f"[Sim2Sim] Running for {duration_s:.0f}s  ({steps} sim steps)")
-        print("[Sim2Sim] Keyboard: ↑/↓=vx  ←/→=yaw  A/D=vy  R=reset cmd")
+        print("[Sim2Sim] Keyboard: ↑/↓=vx  ←/→=yaw  Q/E=vy  R=reset cmd")
 
         try:
             for i in tqdm(range(steps)):

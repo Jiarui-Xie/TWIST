@@ -50,8 +50,8 @@ def train(args):
 
     if args.debug:
         mode = "disabled"
-        args.rows = 1
-        args.cols = 1
+        args.rows = 2
+        args.cols = 2
         args.num_envs = 1  # Single env for low GPU memory
         args.headless = False
     elif getattr(args, 'viz', False):

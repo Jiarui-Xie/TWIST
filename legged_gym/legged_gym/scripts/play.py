@@ -32,6 +32,7 @@ import os
 
 from legged_gym.envs import *
 from legged_gym.gym_utils import get_args, task_registry
+from legged_gym import LEGGED_GYM_ROOT_DIR
 import torch
 import faulthandler
 from tqdm import tqdm
@@ -69,7 +70,8 @@ def set_play_cfg(env_cfg):
 
 def play(args):
     faulthandler.enable()
-    log_pth = "../../logs/{}/".format(args.proj_name) + args.exptid
+    # Use absolute path based on LEGGED_GYM_ROOT_DIR
+    log_pth = os.path.join(LEGGED_GYM_ROOT_DIR, "logs", args.proj_name, args.exptid)
 
     env_cfg, train_cfg = task_registry.get_cfgs(name=args.task)
 
@@ -122,6 +124,9 @@ def play(args):
 
     # load policy
     train_cfg.runner.resume = True
+    # For DAgger runners, skip loading teacher during play (only need student policy)
+    if hasattr(train_cfg.runner, 'eval_student'):
+        train_cfg.runner.eval_student = True
     ppo_runner, train_cfg, log_pth = task_registry.make_alg_runner(log_root = log_pth, env=env, name=args.task, args=args, train_cfg=train_cfg, return_log_dir=True)
 
     if args.use_jit:

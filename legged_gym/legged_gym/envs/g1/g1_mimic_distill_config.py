@@ -516,8 +516,12 @@ class G1MimicCMGBaseCfg(G1MimicPrivCfg):
     """Base configuration for CMG-based motion generation."""
 
     class terrain(G1MimicPrivCfg.terrain):
-        # Use simple plane terrain to reduce GPU memory usage
-        mesh_type = 'plane'
+        mesh_type = 'plane'  # flat ground; slope effect via gravity randomization
+
+    class domain_rand(G1MimicPrivCfg.domain_rand):
+        # Increase gravity randomization to simulate ±5° slopes
+        # sin(5°) * 9.81 ≈ 0.86
+        gravity_range = (-0.86, 0.86)
 
     class motion(G1MimicPrivCfg.motion):
         # Enable CMG motion generation
@@ -536,11 +540,27 @@ class G1MimicCMGBaseCfg(G1MimicPrivCfg):
         # Disable motion curriculum for CMG (not applicable)
         motion_curriculum = False
 
+        # Velocity ramp profile for start/stop training
+        # Profile: [stand → ramp_up → steady → ramp_down → crawl → stand]
+        cmg_ramp_enabled = True
+        cmg_ramp_up_range = [1.0, 3.0]    # ramp-up duration range (seconds)
+        cmg_ramp_down_range = [1.5, 4.0]  # ramp-down duration range (seconds)
+        cmg_ramp_stand_duration = 5.0     # v≈0 standing before/after (fixed)
+        cmg_ramp_crawl_range = [0.5, 1.5] # crawl phase duration range (seconds)
+        cmg_ramp_crawl_ratio = 0.01       # crawl velocity = target * 0.01
+        cmg_ramp_probability = 1.0        # all episodes use ramp
+        cmg_ramp_floor_ratio = 0.1        # stand phase velocity = target * 0.1
+        cmg_ramp_min_steady = 3.0         # minimum steady phase duration (seconds)
+
     class env(G1MimicPrivCfg.env):
+        num_envs = 1024
         # For CMG, we don't track root position since it's generated
         track_root = False
         # Random reset not applicable for CMG
         rand_reset = False
+        # Episode: stand(1) + ramp_up(1~3) + steady(3~) + ramp_down(1.5~4) + crawl(0.5~1.5) + stand(1)
+        # Max non-steady = 1+3+4+1.5+1 = 10.5, so 16.5 gives at least 6s steady
+        episode_length_s = 16.5
 
         # Weakened upper body DOF tracking weights for CMG
         # Encourages upper body to balance freely instead of rigid tracking
@@ -1000,7 +1020,9 @@ class G1MimicCMGStuV2CfgDAgger(G1MimicCMGStuV2Cfg):
         checkpoint = -1
         resume_path = None
 
-        teacher_experiment_name = 'global_obs_v4'
+        # Teacher defaults (can be overridden by CLI: --teacher_exptid, --teacher_proj_name, --teacher_checkpoint)
+        # For v5: trained with h1/cmg_ramp_v2 teacher
+        teacher_experiment_name = 'cmg_ramp_v2'
         teacher_proj_name = 'h1'
         teacher_checkpoint = -1
         eval_student = False

@@ -117,12 +117,18 @@ class Terrain:
             self.add_terrain_to_map(terrain, i, j)
         
     def curiculum(self, random=False, max_difficulty=False):
+        # max_difficulty can be True (legacy: uniform 0.7-1.0) or a float (cap)
+        diff_cap = None
+        if isinstance(max_difficulty, (int, float)) and max_difficulty is not True and max_difficulty is not False:
+            diff_cap = float(max_difficulty)
         for j in range(self.cfg.num_cols):
             for i in range(self.cfg.num_rows):
                 difficulty = i / (self.cfg.num_rows-1)
                 choice = j / self.cfg.num_cols + 0.001
                 if random:
-                    if max_difficulty:
+                    if diff_cap is not None:
+                        terrain = self.make_terrain(choice, np.random.uniform(0, diff_cap))
+                    elif max_difficulty:
                         terrain = self.make_terrain(choice, np.random.uniform(0.7, 1))
                     else:
                         terrain = self.make_terrain(choice, np.random.uniform(0, 1))
@@ -361,7 +367,8 @@ class Terrain:
             env_origin_z = np.max(terrain.height_field_raw[x1:x2, y1:y2])*terrain.vertical_scale
         self.env_origins[i, j] = [env_origin_x, env_origin_y, env_origin_z]
         self.terrain_type[i, j] = terrain.idx
-        self.goals[i, j, :, :2] = terrain.goals + [i * self.env_length, j * self.env_width]
+        if hasattr(terrain, 'goals'):
+            self.goals[i, j, :, :2] = terrain.goals + [i * self.env_length, j * self.env_width]
         # self.env_slope_vec[i, j] = terrain.slope_vector
 
 def gap_terrain(terrain, gap_size, platform_size=1.):

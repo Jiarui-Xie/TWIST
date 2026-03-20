@@ -79,6 +79,15 @@ class HumanoidMimic(HumanoidChar):
                 vx_range=tuple(self.cfg.motion.cmg_vx_range),
                 vy_range=tuple(self.cfg.motion.cmg_vy_range),
                 yaw_range=tuple(self.cfg.motion.cmg_yaw_range),
+                ramp_enabled=getattr(self.cfg.motion, 'cmg_ramp_enabled', False),
+                ramp_up_range=tuple(getattr(self.cfg.motion, 'cmg_ramp_up_range', [1.5, 1.5])),
+                ramp_down_range=tuple(getattr(self.cfg.motion, 'cmg_ramp_down_range', [3.0, 3.0])),
+                ramp_stand_duration=getattr(self.cfg.motion, 'cmg_ramp_stand_duration', 1.0),
+                ramp_crawl_range=tuple(getattr(self.cfg.motion, 'cmg_ramp_crawl_range', [1.0, 1.0])),
+                ramp_crawl_ratio=getattr(self.cfg.motion, 'cmg_ramp_crawl_ratio', 0.01),
+                ramp_probability=getattr(self.cfg.motion, 'cmg_ramp_probability', 0.5),
+                ramp_floor_ratio=getattr(self.cfg.motion, 'cmg_ramp_floor_ratio', 0.0),
+                ramp_min_steady=getattr(self.cfg.motion, 'cmg_ramp_min_steady', 3.0),
             )
             self._use_cmg = True
             cprint(f"[HumanoidMimic] Using CMG motion generation", "cyan")

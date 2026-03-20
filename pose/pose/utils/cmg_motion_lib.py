@@ -89,6 +89,15 @@ class CMGMotionLib:
         vy_range: Tuple[float, float] = (-0.3, 0.3),
         yaw_range: Tuple[float, float] = (-0.5, 0.5),
         root_height: float = 0.75,
+        ramp_enabled: bool = False,
+        ramp_up_range: Tuple[float, float] = (1.5, 1.5),
+        ramp_down_range: Tuple[float, float] = (3.0, 3.0),
+        ramp_stand_duration: float = 1.0,
+        ramp_crawl_range: Tuple[float, float] = (1.0, 1.0),
+        ramp_crawl_ratio: float = 0.01,
+        ramp_probability: float = 0.5,
+        ramp_floor_ratio: float = 0.0,
+        ramp_min_steady: float = 3.0,
     ):
         """
         Initialize CMG motion library.
@@ -115,6 +124,19 @@ class CMGMotionLib:
         self._yaw_range = yaw_range
         self._root_height = root_height
 
+        # Ramp velocity profile parameters
+        # Profile: [stand → ramp_up → steady → ramp_down → crawl → stand]
+        # Durations are per-env random (sampled at each reset)
+        self._ramp_enabled = ramp_enabled
+        self._ramp_up_range = ramp_up_range
+        self._ramp_down_range = ramp_down_range
+        self._ramp_stand_duration = ramp_stand_duration  # fixed stand duration
+        self._ramp_crawl_range = ramp_crawl_range
+        self._ramp_crawl_ratio = ramp_crawl_ratio
+        self._ramp_probability = ramp_probability
+        self._ramp_floor_ratio = ramp_floor_ratio
+        self._ramp_min_steady = ramp_min_steady
+
         # Load CMG model and stats
         self._load_cmg_model(cmg_model_path, cmg_data_path)
 
@@ -133,6 +155,9 @@ class CMGMotionLib:
         # Initialize motion state buffers
         self._init_buffers()
 
+        # Build standing pose for ramp stand phases
+        self._build_standing_pose()
+
         # Build velocity estimator from training data
         self._build_velocity_estimator()
 
@@ -140,6 +165,11 @@ class CMGMotionLib:
               f"vx=[{vx_range[0]:.1f}, {vx_range[1]:.1f}], "
               f"vy=[{vy_range[0]:.1f}, {vy_range[1]:.1f}], "
               f"yaw=[{yaw_range[0]:.1f}, {yaw_range[1]:.1f}]")
+        if self._ramp_enabled:
+            print(f"[CMGMotionLib] Ramp: stand={ramp_stand_duration:.1f}s(fixed), "
+                  f"ramp_up={ramp_up_range}, ramp_down={ramp_down_range}, "
+                  f"crawl={ramp_crawl_range}(ratio={ramp_crawl_ratio}), "
+                  f"floor={ramp_floor_ratio:.2f}, min_steady={ramp_min_steady:.1f}s")
 
     def _load_cmg_model(self, model_path: str, data_path: str):
         """Load CMG model and normalization statistics."""
@@ -200,8 +230,19 @@ class CMGMotionLib:
         )
         self._root_rot_buffer[:, :, 0] = 1.0  # Unit quaternion
 
-        # Current velocity commands
+        # Current velocity commands (instantaneous, updated by ramp schedule)
         self._commands = torch.zeros(self._num_envs, 3, device=self._device)
+
+        # Target velocity commands (sampled at reset, constant during episode)
+        self._target_commands = torch.zeros(self._num_envs, 3, device=self._device)
+
+        # Per-env flag: whether this episode uses ramp profile
+        self._ramp_enabled_flags = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
+
+        # Per-env ramp durations (sampled at each reset)
+        self._env_ramp_up = torch.zeros(self._num_envs, device=self._device)
+        self._env_ramp_down = torch.zeros(self._num_envs, device=self._device)
+        self._env_crawl = torch.zeros(self._num_envs, device=self._device)
 
         # Root state tracking
         self._root_pos = torch.zeros(self._num_envs, 3, device=self._device)
@@ -223,7 +264,35 @@ class CMGMotionLib:
         # Kept for backward compatibility only; not updated or read anywhere active.
         self._actual_commands = torch.zeros(self._num_envs, 3, device=self._device)
 
-        # Mirror flags for left-right symmetry training
+    def _build_standing_pose(self):
+        """Build a normalized standing pose for ramp stand phases.
+
+        During stand phases (v=0), we freeze the CMG and output this static pose
+        instead of feeding v=0 to the CMG (which is out-of-distribution).
+
+        The standing pose uses G1 default joint angles with zero velocities.
+        """
+        # G1 default joint angles (23 DOF)
+        default_23 = torch.tensor([
+            -0.2, 0.0, 0.0, 0.4, -0.2, 0.0,   # left leg
+            -0.2, 0.0, 0.0, 0.4, -0.2, 0.0,   # right leg
+             0.0, 0.0, 0.0,                    # waist
+             0.0, 0.4, 0.0, 1.2,               # left arm
+             0.0,-0.4, 0.0, 1.2,               # right arm
+        ], device=self._device, dtype=torch.float32)
+
+        # Map 23 DOF back to 29 DOF (insert zeros for wrist joints)
+        default_29 = torch.zeros(29, device=self._device)
+        default_29[CMG_TO_G1_INDICES] = default_23
+
+        # Standing motion state: [pos_29, vel_29] = 58 dims, vel=0
+        standing_raw = torch.zeros(self._stats["motion_dim"], device=self._device)
+        standing_raw[:29] = default_29
+
+        # Normalize
+        self._standing_pose_norm = self._normalize_motion(standing_raw.unsqueeze(0)).squeeze(0)
+
+    # Mirror flags for left-right symmetry training
         self._mirror_flags = torch.zeros(self._num_envs, dtype=torch.bool, device=self._device)
         self._dof_mirror_indices = torch.tensor(DOF_MIRROR_INDICES_23, device=self._device, dtype=torch.long)
         self._dof_mirror_signs = torch.tensor(DOF_MIRROR_SIGNS_23, device=self._device, dtype=torch.float)
@@ -302,12 +371,95 @@ class CMGMotionLib:
 
         return vel_avg
 
+    def _sample_uniform(self, n: int, range: Tuple[float, float]) -> torch.Tensor:
+        """Sample n values uniformly from [range[0], range[1]]."""
+        return torch.rand(n, device=self._device) * (range[1] - range[0]) + range[0]
+
     def _sample_commands(self, n: int) -> torch.Tensor:
         """Sample random velocity commands within configured ranges."""
         vx = torch.rand(n, device=self._device) * (self._vx_range[1] - self._vx_range[0]) + self._vx_range[0]
         vy = torch.rand(n, device=self._device) * (self._vy_range[1] - self._vy_range[0]) + self._vy_range[0]
         yaw = torch.rand(n, device=self._device) * (self._yaw_range[1] - self._yaw_range[0]) + self._yaw_range[0]
         return torch.stack([vx, vy, yaw], dim=-1)
+
+    def _compute_ramp_scale(self, env_ids: torch.Tensor, times: torch.Tensor) -> torch.Tensor:
+        """Compute velocity scale factor for 6-phase ramp profile with per-env durations.
+
+        Profile: [stand → ramp_up → steady → ramp_down → crawl → stand]
+
+        Stand duration is fixed (1s). ramp_up, ramp_down, crawl are per-env random.
+        Steady phase fills remaining time.
+
+        Args:
+            env_ids: Environment indices, shape (n,)
+            times: Episode-local times for each env, shape (n,)
+
+        Returns:
+            Scale factors in [min(floor, crawl), 1.0], shape (n,)
+        """
+        n = len(env_ids)
+        scale = torch.ones(n, device=self._device)
+
+        if not self._ramp_enabled:
+            return scale
+
+        ramp_mask = self._ramp_enabled_flags[env_ids]
+        if not ramp_mask.any():
+            return scale
+
+        t_stand = self._ramp_stand_duration
+        t_ep = self._episode_length_s
+        floor = self._ramp_floor_ratio
+        crawl = self._ramp_crawl_ratio
+
+        # Per-env durations (vectorized)
+        t_ramp_up = self._env_ramp_up[env_ids[ramp_mask]]   # (m,)
+        t_ramp_down = self._env_ramp_down[env_ids[ramp_mask]]  # (m,)
+        t_crawl = self._env_crawl[env_ids[ramp_mask]]       # (m,)
+
+        t = times[ramp_mask]  # (m,)
+
+        # Phase boundaries per env
+        t1 = t_stand                                # end of initial stand (scalar)
+        t2 = t1 + t_ramp_up                         # end of ramp-up (m,)
+        t6 = t_ep                                   # episode end (scalar)
+        t5 = t6 - t_stand                           # start of final stand (scalar)
+        t4 = t5 - t_crawl                           # start of crawl → end of ramp-down (m,)
+        t3 = t4 - t_ramp_down                       # start of ramp-down (m,)
+
+        # Build scale per phase (vectorized with per-env boundaries)
+        s = torch.ones_like(t)
+
+        # Phase 1: initial stand [0, t1)
+        mask_stand1 = t < t1
+        s[mask_stand1] = floor
+
+        # Phase 2: ramp-up [t1, t2) — floor → 1.0
+        mask_ramp_up = (t >= t1) & (t < t2)
+        if mask_ramp_up.any():
+            progress = (t[mask_ramp_up] - t1) / t_ramp_up[mask_ramp_up]
+            s[mask_ramp_up] = floor + (1.0 - floor) * progress
+
+        # Phase 3: steady [t2, t3) — 1.0
+        # (already 1.0)
+
+        # Phase 4: ramp-down [t3, t4) — 1.0 → crawl
+        mask_ramp_down = (t >= t3) & (t < t4)
+        if mask_ramp_down.any():
+            progress = (t4[mask_ramp_down] - t[mask_ramp_down]) / t_ramp_down[mask_ramp_down]
+            s[mask_ramp_down] = crawl + (1.0 - crawl) * progress
+
+        # Phase 5: crawl [t4, t5) — crawl_ratio
+        mask_crawl = (t >= t4) & (t < t5)
+        s[mask_crawl] = crawl
+
+        # Phase 6: final stand [t5, t6] — floor
+        mask_stand2 = t >= t5
+        s[mask_stand2] = floor
+
+        scale[ramp_mask] = s
+
+        return scale
 
     def _get_init_motion(self, n: int) -> torch.Tensor:
         """Get initial motion states from training data samples."""
@@ -380,53 +532,67 @@ class CMGMotionLib:
 
     @torch.no_grad()
     def _generate_trajectory(self, env_ids: torch.Tensor):
-        """Pre-generate trajectory buffer for specified environments (vectorized)."""
+        """Pre-generate trajectory buffer for specified environments (vectorized).
+
+        When ramp is enabled, each frame uses a time-varying command scaled by the
+        trapezoidal ramp profile. Root position/rotation are integrated frame-by-frame
+        (Euler) instead of using closed-form time_offset * velocity.
+        """
         if len(env_ids) == 0:
             return
 
         n = len(env_ids)
 
-        # Get current state and commands
+        # Get current state
         current_norm = self._current_motion_norm[env_ids].clone()
-        commands = self._commands[env_ids]
-        commands_norm = self._normalize_command(commands)
 
         # Store initial position/rotation
         root_pos = self._root_pos[env_ids].clone()  # (n, 3)
         root_yaw = self._root_yaw[env_ids].clone()  # (n,)
 
-        # Generate trajectory - only motion states (root buffers computed after velocity estimation)
+        # Base time for ramp scale computation
+        base_time = self._motion_times[env_ids]  # (n,)
+
+        # Generate trajectory with per-frame ramp-scaled commands
         for frame in range(self.TRAJECTORY_BUFFER_FRAMES):
             self._trajectory_buffer[env_ids, frame] = current_norm
-            next_motion_norm = self._cmg_model(current_norm, commands_norm)
-            current_norm = next_motion_norm
+
+            frame_time = base_time + frame * self._dt
+            scale = self._compute_ramp_scale(env_ids, frame_time)  # (n,)
+            frame_cmd = self._target_commands[env_ids] * scale.unsqueeze(-1)  # (n, 3)
+            frame_cmd_norm = self._normalize_command(frame_cmd)
+
+            current_norm = self._cmg_model(current_norm, frame_cmd_norm)
 
         # Reset buffer frame index
         self._buffer_frame_idx[env_ids] = 0
 
-        # Build root position/rotation buffers using raw user commands
-        cmd_vx = self._commands[env_ids, 0]  # (n,)
-        cmd_vy = self._commands[env_ids, 1]  # (n,)
-        cmd_yaw_rate = self._commands[env_ids, 2]  # (n,)
+        # Build root position/rotation buffers with per-frame Euler integration
+        pos = root_pos.clone()  # (n, 3)
+        yaw = root_yaw.clone()  # (n,)
 
         for frame in range(self.TRAJECTORY_BUFFER_FRAMES):
-            time_offset = frame * self._dt
+            frame_time = base_time + frame * self._dt
+            scale = self._compute_ramp_scale(env_ids, frame_time)  # (n,)
+            frame_cmd = self._target_commands[env_ids] * scale.unsqueeze(-1)  # (n, 3)
 
-            avg_yaw = root_yaw + cmd_yaw_rate * time_offset * 0.5
-            new_yaw = root_yaw + cmd_yaw_rate * time_offset
-
-            cos_yaw_f = torch.cos(avg_yaw)
-            sin_yaw_f = torch.sin(avg_yaw)
-
-            self._root_pos_buffer[env_ids, frame, 0] = root_pos[:, 0] + (cmd_vx * cos_yaw_f - cmd_vy * sin_yaw_f) * time_offset
-            self._root_pos_buffer[env_ids, frame, 1] = root_pos[:, 1] + (cmd_vx * sin_yaw_f + cmd_vy * cos_yaw_f) * time_offset
+            # Store current frame position/rotation
+            self._root_pos_buffer[env_ids, frame, 0] = pos[:, 0]
+            self._root_pos_buffer[env_ids, frame, 1] = pos[:, 1]
             self._root_pos_buffer[env_ids, frame, 2] = self._root_height
 
-            half_yaw = new_yaw * 0.5
+            half_yaw = yaw * 0.5
             self._root_rot_buffer[env_ids, frame, 0] = torch.cos(half_yaw)
             self._root_rot_buffer[env_ids, frame, 1] = 0.0
             self._root_rot_buffer[env_ids, frame, 2] = 0.0
             self._root_rot_buffer[env_ids, frame, 3] = torch.sin(half_yaw)
+
+            # Euler integrate to next frame
+            cos_y = torch.cos(yaw)
+            sin_y = torch.sin(yaw)
+            pos[:, 0] += (frame_cmd[:, 0] * cos_y - frame_cmd[:, 1] * sin_y) * self._dt
+            pos[:, 1] += (frame_cmd[:, 0] * sin_y + frame_cmd[:, 1] * cos_y) * self._dt
+            yaw = yaw + frame_cmd[:, 2] * self._dt
 
     def _update_root_state(self, dt: float):
         """Update root position and orientation based on user commands."""
@@ -487,6 +653,34 @@ class CMGMotionLib:
         # Update motion time
         self._motion_times[env_ids] += self._dt
 
+        # Update instantaneous commands from ramp schedule
+        if self._ramp_enabled:
+            all_ids = torch.arange(self._num_envs, device=self._device)
+            scale = self._compute_ramp_scale(all_ids, self._motion_times)
+            self._commands[:] = self._target_commands * scale.unsqueeze(-1)
+
+        # Debug: periodic status print (every 50 steps ~1s for env 0)
+        self._step_counter = getattr(self, '_step_counter', 0) + 1
+        if self._step_counter % 50 == 0 and self._num_envs <= 4:
+            env0 = 0
+            fi = self._buffer_frame_idx[env0].item()
+            mt = self._motion_times[env0].item()
+            cmd = self._commands[env0].cpu().numpy()
+            tcmd = self._target_commands[env0].cpu().numpy()
+            ramp_flag = self._ramp_enabled_flags[env0].item() if self._ramp_enabled else False
+            norm_std = self._current_motion_norm[env0].std().item()
+            # Sample a few DOF positions from current buffer frame
+            frame_idx = min(fi, self.TRAJECTORY_BUFFER_FRAMES - 1)
+            motion_norm = self._trajectory_buffer[env0, frame_idx]
+            motion = self._denormalize_motion(motion_norm.unsqueeze(0))
+            knee_l = motion[0, CMG_TO_G1_INDICES[3]].item()
+            knee_r = motion[0, CMG_TO_G1_INDICES[9]].item()
+            print(f"[CMG dbg] step={self._step_counter} t={mt:.2f}s frame={fi} "
+                  f"cmd=[{cmd[0]:.2f},{cmd[1]:.2f},{cmd[2]:.2f}] "
+                  f"target=[{tcmd[0]:.2f},{tcmd[1]:.2f},{tcmd[2]:.2f}] "
+                  f"ramp={ramp_flag} norm_std={norm_std:.3f} "
+                  f"knee=[{knee_l:.3f},{knee_r:.3f}]")
+
     def reset(self, env_ids: torch.Tensor, commands: Optional[torch.Tensor] = None):
         """
         Reset specified environments.
@@ -502,15 +696,43 @@ class CMGMotionLib:
         # Reset motion times
         self._motion_times[env_ids] = 0.0
 
-        # Sample or set commands
+        # Sample or set target commands
         if commands is None:
-            self._commands[env_ids] = self._sample_commands(n)
+            self._target_commands[env_ids] = self._sample_commands(n)
         else:
-            self._commands[env_ids] = commands
+            self._target_commands[env_ids] = commands
 
-        # Get initial motion states
-        init_motion = self._get_init_motion(n)
-        self._current_motion_norm[env_ids] = self._normalize_motion(init_motion)
+        # All episodes use ramp profile: stand → ramp_up → steady → ramp_down → stand
+        if self._ramp_enabled:
+            self._ramp_enabled_flags[env_ids] = True
+
+            # Sample per-env random durations
+            self._env_ramp_up[env_ids] = self._sample_uniform(n, self._ramp_up_range)
+            self._env_ramp_down[env_ids] = self._sample_uniform(n, self._ramp_down_range)
+            self._env_crawl[env_ids] = self._sample_uniform(n, self._ramp_crawl_range)
+
+            # Clamp to ensure minimum steady phase
+            max_variable = self._episode_length_s - 2 * self._ramp_stand_duration - self._ramp_min_steady
+            total_variable = self._env_ramp_up[env_ids] + self._env_ramp_down[env_ids] + self._env_crawl[env_ids]
+            over = (total_variable - max_variable).clamp(min=0)
+            if over.any().item():
+                # Proportionally shrink to fit
+                ratio = max_variable / total_variable.clamp(min=1e-6)
+                ratio = ratio.clamp(max=1.0)
+                self._env_ramp_up[env_ids] *= ratio
+                self._env_ramp_down[env_ids] *= ratio
+                self._env_crawl[env_ids] *= ratio
+
+            # Initial commands = target * scale(t=0), near-zero during stand phase
+            scale = self._compute_ramp_scale(env_ids, torch.zeros(n, device=self._device))
+            self._commands[env_ids] = self._target_commands[env_ids] * scale.unsqueeze(-1)
+        else:
+            self._ramp_enabled_flags[env_ids] = False
+            self._commands[env_ids] = self._target_commands[env_ids]
+
+        # Initialize motion states: all envs start from standing pose
+        # (matches the stand phase at t=0 where v ≈ 0)
+        self._current_motion_norm[env_ids] = self._standing_pose_norm.unsqueeze(0)
 
         # Reset root state
         self._root_pos[env_ids] = 0.0
@@ -527,6 +749,16 @@ class CMGMotionLib:
 
         # Generate trajectory for reset envs
         self._generate_trajectory(env_ids)
+
+        # Debug: log reset events
+        if self._num_envs <= 4:
+            for eid in env_ids:
+                eid_val = eid.item() if isinstance(eid, torch.Tensor) else eid
+                tcmd = self._target_commands[eid_val].cpu().numpy()
+                ramp_flag = self._ramp_enabled_flags[eid_val].item() if self._ramp_enabled else False
+                mirror = self._mirror_flags[eid_val].item()
+                print(f"[CMG reset] env={eid_val} target=[{tcmd[0]:.2f},{tcmd[1]:.2f},{tcmd[2]:.2f}] "
+                      f"ramp={ramp_flag} mirror={mirror}")
 
     # ==================== MotionLib Interface ====================
 
@@ -634,7 +866,9 @@ class CMGMotionLib:
             root_pos = self._root_pos_buffer[env_indices, target_frames]  # (batch_size, 3)
             root_rot = self._root_rot_buffer[env_indices, target_frames]  # (batch_size, 4)
 
-            commands = self._commands[env_indices]  # (batch_size, 3)
+            # Compute time-varying commands at query times (for ramp support)
+            scale = self._compute_ramp_scale(env_indices, motion_times)  # (batch_size,)
+            commands = self._target_commands[env_indices] * scale.unsqueeze(-1)  # (batch_size, 3)
             vx_local = commands[:, 0]
             vy_local = commands[:, 1]
             yaw_rate = commands[:, 2]
@@ -842,4 +1076,5 @@ class CMGMotionLib:
 
     def set_commands(self, env_ids: torch.Tensor, commands: torch.Tensor):
         """Set velocity commands for specified environments."""
+        self._target_commands[env_ids] = commands
         self._commands[env_ids] = commands

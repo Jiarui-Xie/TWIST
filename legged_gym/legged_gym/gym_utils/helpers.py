@@ -165,9 +165,11 @@ def update_cfg_from_args(env_cfg, cfg_train, args):
 
         try:
             cfg_train.runner.teacher_experiment_name = args.teacher_exptid
+            if args.teacher_proj_name is not None:
+                cfg_train.runner.teacher_proj_name = args.teacher_proj_name
             cfg_train.runner.teacher_checkpoint = args.teacher_checkpoint
         except:
-            print(f"No distillation set; Ignore teacher exptid {args.teacher_exptid} and teacher checkpoint {args.teacher_checkpoint}")
+            print(f"No distillation set; Ignore teacher exptid {args.teacher_exptid}, teacher_proj_name {args.teacher_proj_name}, and teacher checkpoint {args.teacher_checkpoint}")
             pass
         
         if args.eval_student:
@@ -222,6 +224,7 @@ def get_args():
         {"name": "--use_transformer", "action": "store_true", "default": False, "help": "use transformer"},
 
         {"name": "--teacher_exptid", "type": str, "help": "teacher exptid", "default": "mimic"},
+        {"name": "--teacher_proj_name", "type": str, "help": "teacher project name", "default": None},
         {"name": "--teacher_checkpoint", "type": int, "help": "teacher checkpoint", "default": -1},
         {"name": "--eval_student", "action": "store_true", "default": False, "help": "eval student"},
         

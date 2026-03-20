@@ -298,7 +298,7 @@
 
   <worldbody>
     <geom name="floor" size="0 0 0.01" type="plane" material="groundplane" contype="1" conaffinity="0" priority="1"
-      friction="0.6" condim="3"/>
+      friction="1.0 0.005 0.0001" condim="4"/>
 
       <light diffuse=".5 .5 .5" pos="0 0 5" dir="0 0 -1" castshadow="true"/>
 
