@@ -996,7 +996,7 @@ class G1MimicCMGStuV2Cfg(G1MimicCMGBaseCfg):
 
 class G1MimicCMGStuV2CfgDAgger(G1MimicCMGStuV2Cfg):
     """DAgger distillation V2: CMG teacher → CMG student with full future reference.
-    
+
     Teacher: global_obs_v4 (velocity-tracking CMG teacher).
     Student: gets same 20-step mimic_obs, learns without privileged info.
     """
@@ -1045,3 +1045,99 @@ class G1MimicCMGStuV2CfgDAgger(G1MimicCMGStuV2Cfg):
         activation = 'silu'
         layer_norm = True
         motion_latent_dim = 128
+
+
+# ==================== CMG Fine-Tune Configuration ====================
+
+class G1MimicCMGFineTuneCfg(G1MimicCMGVelTrackBaseCfg):
+    """Fine-tune config: reduced CMG tracking, style rewards, standing pose at v=0.
+
+    Resume from cmg_ramp_v2 teacher checkpoint.
+    Key changes vs VelTrackBase:
+      - cmg_ramp_floor_ratio=0.0 (true zero-velocity standing)
+      - Wider speed range [-0.5, 3.0] (covers backward to fast walking)
+      - Upper body constraints (orientation, torso_upright)
+      - Feet-flat contact reward
+      - Root height maintenance reward
+      - Reduced CMG motion tracking
+    """
+
+    class motion(G1MimicCMGVelTrackBaseCfg.motion):
+        use_cmg = True
+        cmg_model_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/runs/cmg_20260123_194851/cmg_final.pt"
+        cmg_data_path = f"{LEGGED_GYM_ROOT_DIR}/../cmg_workspace/dataloader/cmg_training_data.pt"
+        cmg_dt = 0.02
+        motion_curriculum = False
+        cmg_vx_range = [-0.5, 3.0]
+        cmg_vy_range = [-0.5, 0.5]
+        cmg_yaw_range = [-0.5, 0.5]
+        # True zero-velocity standing (CMG outputs standing pose directly)
+        cmg_ramp_floor_ratio = 0.0
+
+    class env(G1MimicCMGVelTrackBaseCfg.env):
+        track_root = False
+        rand_reset = False
+
+        # Tighten waist DOF weights to constrain upper body
+        dof_err_w = [1.0, 0.8, 0.8, 1.0, 0.5, 0.5,   # Left Leg
+                     1.0, 0.8, 0.8, 1.0, 0.5, 0.5,   # Right Leg
+                     0.8, 0.8, 0.8,                     # Waist (up from 0.4)
+                     0.2, 0.2, 0.2, 0.3,               # Left Arm
+                     0.2, 0.2, 0.2, 0.3,               # Right Arm
+                     ]
+
+        use_cmd_obs = True
+        num_actions = 23
+        n_cmd = 3
+        n_proprio = 3 + 2 + 3 * num_actions + n_cmd
+        n_obs_single = 1160 + n_proprio + 84
+        n_priv_obs_single = n_obs_single
+        num_observations = n_obs_single
+        num_privileged_obs = n_priv_obs_single
+
+    class rewards(G1MimicCMGVelTrackBaseCfg.rewards):
+        target_root_height = 0.75
+
+        class scales(G1MimicCMGVelTrackBaseCfg.rewards.scales):
+            # ── CMG tracking (weakened) ──
+            tracking_keybody_pos = 0.8           # 1.2 → 0.8
+            tracking_keybody_pos_upper = 0.15    # 0.8 → 0.15
+            tracking_joint_dof = 0.3             # 0.4 → 0.3
+            tracking_joint_vel = 0.1             # unchanged
+
+            # ── Velocity tracking (unchanged from VT) ──
+            tracking_cmd_vel = 3.0
+            tracking_cmd_yaw = 2.0
+
+            # ── Upper body constraints ──
+            orientation = -0.4                   # enable existing orientation penalty
+            torso_upright = -0.3                 # new: asymmetric pitch/roll penalty
+            ang_vel_xy = -0.05                   # -0.01 → -0.05
+
+            # ── Gait style ──
+            action_symmetry = 0.2                # 0.1 → 0.2
+            root_height = 0.5                    # new: pelvis height maintenance
+            action_rate = -0.02                  # unchanged from VT
+            feet_flat = 0.3                      # new: feet parallel to ground on contact
+
+            # ── Penalties (unchanged) ──
+            feet_slip = -0.1
+            feet_contact_forces = -5e-4
+            feet_stumble = -1.25
+            dof_pos_limits = -5.0
+            dof_torque_limits = -1.0
+            dof_vel = -1e-4
+            dof_acc = -5e-8
+            feet_air_time = 5.0
+
+
+class G1MimicCMGFineTuneCfgPPO(G1MimicPrivCfgPPO):
+    seed = 1
+
+    class runner(G1MimicPrivCfgPPO.runner):
+        policy_class_name = 'ActorCriticMimic'
+        algorithm_class_name = 'PPO'
+        runner_class_name = 'OnPolicyRunnerMimic'
+        max_iterations = 10_001
+        save_interval = 500
+        experiment_name = 'cmg_finetune'

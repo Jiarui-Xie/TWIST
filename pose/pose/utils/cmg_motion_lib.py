@@ -76,6 +76,9 @@ class CMGMotionLib:
     # Number of frames to pre-generate in the trajectory buffer (at CMG's 50 Hz)
     TRAJECTORY_BUFFER_FRAMES = 100  # 2 seconds at 50 Hz
 
+    # Below this ramp scale, use standing pose instead of CMG autoregressive output
+    STANDING_SCALE_THRESHOLD = 1e-3
+
     def __init__(
         self,
         cmg_model_path: str,
@@ -555,14 +558,23 @@ class CMGMotionLib:
 
         # Generate trajectory with per-frame ramp-scaled commands
         for frame in range(self.TRAJECTORY_BUFFER_FRAMES):
-            self._trajectory_buffer[env_ids, frame] = current_norm
-
             frame_time = base_time + frame * self._dt
             scale = self._compute_ramp_scale(env_ids, frame_time)  # (n,)
-            frame_cmd = self._target_commands[env_ids] * scale.unsqueeze(-1)  # (n, 3)
-            frame_cmd_norm = self._normalize_command(frame_cmd)
 
-            current_norm = self._cmg_model(current_norm, frame_cmd_norm)
+            # When scale is near-zero (stand phase), use standing pose directly
+            # instead of feeding near-zero commands to CMG (which is out-of-distribution)
+            standing_mask = (scale < self.STANDING_SCALE_THRESHOLD)
+
+            if standing_mask.any():
+                self._trajectory_buffer[env_ids[standing_mask], frame] = self._standing_pose_norm
+                current_norm[standing_mask] = self._standing_pose_norm
+
+            if (~standing_mask).any():
+                active = ~standing_mask
+                self._trajectory_buffer[env_ids[active], frame] = current_norm[active]
+                frame_cmd = self._target_commands[env_ids[active]] * scale[active].unsqueeze(-1)
+                frame_cmd_norm = self._normalize_command(frame_cmd)
+                current_norm[active] = self._cmg_model(current_norm[active], frame_cmd_norm)
 
         # Reset buffer frame index
         self._buffer_frame_idx[env_ids] = 0

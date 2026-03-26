@@ -1020,6 +1020,15 @@ CMG_TO_G1_INDICES = [0-18, 22-25]  # 跳过 19,20,21 (左手腕) 和 26,27,28 (�
 - **输出**：29-DOF 关节目标位置和速度
 - **训练数据**：322MB 的运动序列张量
 
+**运行时数据依赖（`cmg_training_data.pt`）：**
+
+CMG 模型权重（`cmg_final.pt`）只存储网络参数。推理时 `CMGMotionLib._load_cmg_model()` 还需要加载 `cmg_training_data.pt`，从中提取：
+
+1. **`data["stats"]`** — 归一化参数：`motion_mean`, `motion_std`, `command_min`, `command_max` 以及 `motion_dim`, `command_dim`。CMG 模型在标准化空间中运行，所有推理都需要 `_normalize_motion()` / `_denormalize_motion()` / `_normalize_command()` 进行输入输出转换。
+2. **`data["samples"]`** — 训练数据中的运动样本，用于 env reset 时提供初始运动状态（`_init_samples`）。
+
+因此**所有使用 `CMGMotionLib` 的场景**（训练、sim2sim、sim2real）都必须能访问此文件。默认路径：`cmg_workspace/dataloader/cmg_training_data.pt`。
+
 ---
 
 ## 11. 机器人模型详解
@@ -1361,6 +1370,7 @@ apt install libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 libegl1 libglvnd0
 - 确认 JIT 导出时 Normalizer 正确烘焙
 - 确认 `ACTION_SCALE`, `NUM_OBS`, `DECIMATION` 与训练配置一致
 - 检查 `DEFAULT_DOF_POS` 是否与训练配置的 `default_joint_angles` 一致
+- 确认 `cmg_training_data.pt` 存在（`cmg_workspace/dataloader/` 下）—— CMG 推理需要其中的归一化统计量和初始运动样本，缺失会导致 `CMGMotionLib` 加载失败
 
 ---
 

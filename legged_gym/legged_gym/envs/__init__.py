@@ -48,6 +48,7 @@ from .g1.g1_mimic_distill_config import (
     G1MimicCMGFastVTCfg, G1MimicCMGFastVTCfgPPO,
     G1MimicCMGStuRLCfg, G1MimicCMGStuRLCfgDAgger,
     G1MimicCMGStuV2Cfg, G1MimicCMGStuV2CfgDAgger,
+    G1MimicCMGFineTuneCfg, G1MimicCMGFineTuneCfgPPO,
 )
 
 from legged_gym.gym_utils.task_registry import task_registry
@@ -73,4 +74,7 @@ task_registry.register("g1_cmg_stu_rl", G1MimicDistill, G1MimicCMGStuRLCfg(), G1
 
 # CMG student V2 (full 20-step future reference, no privileged info)
 task_registry.register("g1_cmg_stu_v2", G1MimicDistill, G1MimicCMGStuV2Cfg(), G1MimicCMGStuV2CfgDAgger())
+
+# CMG fine-tune (reduced tracking, style rewards, standing pose at v=0)
+task_registry.register("g1_cmg_finetune", G1MimicDistill, G1MimicCMGFineTuneCfg(), G1MimicCMGFineTuneCfgPPO())
 

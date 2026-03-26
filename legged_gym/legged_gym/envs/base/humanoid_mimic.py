@@ -696,7 +696,13 @@ class HumanoidMimic(HumanoidChar):
     def _reward_orientation(self):
         rew = torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
         return rew
-    
+
+    def _reward_torso_upright(self):
+        """Penalize torso tilt with 3x heavier weight on pitch (backward lean) than roll."""
+        pitch_err = torch.square(self.projected_gravity[:, 0])
+        roll_err = torch.square(self.projected_gravity[:, 1])
+        return pitch_err * 3.0 + roll_err
+
     def _reward_dof_acc(self):
         return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
     
@@ -824,3 +830,23 @@ class HumanoidMimic(HumanoidChar):
         yaw_scale = 1.0  # Tunable scale
 
         return torch.exp(-yaw_scale * yaw_err)
+
+    def _reward_feet_flat(self):
+        """Reward feet being parallel to the ground when in contact."""
+        foot_quat = self.rigid_body_states[:, self.feet_indices, 3:7]  # (N, num_feet, 4)
+        up_vec = torch.zeros(self.num_envs, 3, device=self.device)
+        up_vec[:, 2] = 1.0
+        foot_up_z = torch.stack([
+            quat_rotate(foot_quat[:, i], up_vec)[:, 2]
+            for i in range(len(self.feet_indices))
+        ], dim=1)  # (N, num_feet)
+        deviation = 1.0 - foot_up_z
+        contact = self.contact_forces[:, self.feet_indices, 2] > 5.0
+        reward = torch.exp(-20.0 * deviation ** 2) * contact.float()
+        return reward.sum(dim=1)
+
+    def _reward_root_height(self):
+        """Reward maintaining target root height."""
+        target_h = getattr(self.cfg.rewards, 'target_root_height', 0.75)
+        height_err = torch.square(self.root_states[:, 2] - target_h)
+        return torch.exp(-10.0 * height_err)
