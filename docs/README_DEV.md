@@ -122,6 +122,7 @@ TWIST/
 │
 ├── deploy_real/                   # 🚀 部署（Sim2Sim & Sim2Real）
 │   ├── sim2sim_cmg_stu_v2.py             # ⭐ MuJoCo 仿真验证（CMG Student V2）
+│   ├── sim2sim_unitree_mujoco.py         # ⭐ unitree_mujoco DDS 仿真验证（可直连真机）
 │   ├── deploy_real_cmg_stu_v2.py         # ⭐ 实机部署（CMG Student V2）
 │   ├── server_low_level_g1_sim.py        # 低层仿真服务（Redis，旧管线）
 │   ├── server_low_level_g1_real.py       # 低层实机服务（Redis，旧管线）
@@ -520,6 +521,74 @@ python sim2sim_cmg_stu_v2.py \
 | ←/→ | 增加/减少偏航角速度 (yaw) |
 | Q/E | 增加/减少侧向速度 (vy) |
 | R | 重置 |
+
+#### unitree_mujoco Sim2Sim（DDS 接口，可直连真机）
+
+使用宇树官方 `unitree_mujoco` 仿真器，通过 DDS 协议通信。**优势**：控制器代码与实机部署完全一致，只需改 `domain_id` 和 `interface` 即可切换仿真/实机。
+
+**前置安装：**
+```bash
+pip install unitree_sdk2py mujoco pygame
+git clone https://github.com/unitreerobotics/unitree_mujoco.git
+```
+
+**配置 unitree_mujoco：** 编辑 `unitree_mujoco/simulate_python/config.py`：
+```python
+ROBOT = "g1"
+ROBOT_SCENE = "../unitree_robots/g1/scene_23dof.xml"  # 23-DOF 场景
+DOMAIN_ID = 1   # 1 = 仿真
+INTERFACE = "lo" # 本地回环
+```
+
+**运行（双终端）：**
+```bash
+# 终端 1：启动 unitree_mujoco 仿真器
+cd unitree_mujoco/simulate_python
+python unitree_mujoco.py
+
+# 终端 2：启动控制器
+cd deploy_real
+python sim2sim_unitree_mujoco.py \
+    --policy_path ../legged_gym/logs/g1_cmg_stu_v2/cmg_stu_v4/traced/cmg_stu_v4-21000-jit.pt \
+    --cmd_vx 1.5 \
+    --domain_id 1 \
+    --interface lo
+```
+
+**参数说明：**
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--policy_path` | (必填) | JIT 模型路径 |
+| `--cmd_vx/vy/yaw` | 0.0 | 初始速度指令 |
+| `--domain_id` | 1 | DDS 域 ID（1=仿真，0=真机） |
+| `--interface` | lo | 网络接口（lo=仿真，eno1=真机） |
+| `--device` | cpu | 推理设备 |
+| `--duration` | 0 | 运行时长（0=无限） |
+
+> **注意**：键盘控制在 unitree_mujoco 的 MuJoCo viewer 窗口中操作，速度指令通过命令行参数 `--cmd_vx/vy/yaw` 设置初始值。
+
+#### unitree_mujoco Sim2Real（DDS 接口，直连真机）
+
+与上面的 sim2sim 使用**同一个脚本**，只需更改 `domain_id` 和 `interface`：
+
+```bash
+cd deploy_real
+python sim2sim_unitree_mujoco.py \
+    --policy_path ../legged_gym/logs/g1_cmg_stu_v2/cmg_stu_v4/traced/cmg_stu_v4-21000-jit.pt \
+    --cmd_vx 1.0 \
+    --domain_id 0 \
+    --interface eno1
+```
+
+| 参数差异 | Sim2Sim | Sim2Real |
+|---------|---------|----------|
+| `--domain_id` | 1 | 0 |
+| `--interface` | lo | eno1（或实际网口名） |
+
+**实机前置步骤**同 [CMG Student V2 实机部署](#cmg-student-v2-实机部署)（连线、设 IP、开发模式等）。
+
+> **注意**：此脚本启动后立即发送电机指令。实机使用时请确保机器人已处于安全状态，建议先用 `deploy_real_cmg_stu_v2.py` 的手柄流程（有零力矩→默认站姿→保持→策略的安全启动序列）。`sim2sim_unitree_mujoco.py` 目前没有手柄安全启动流程，适合仿真验证和熟练操作者使用。
 
 #### 旧管线 Sim2Sim（需要 Redis）
 
